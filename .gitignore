@@ -1,0 +1,21 @@
+# Built outputs
+*.iml
+.gradle
+build/
+/captures
+.externalNativeBuild
+.cxx
+
+# Local configuration
+local.properties
+
+# IDE
+.idea/
+.DS_Store
+
+# AI tooling
+.claude/
+.skills/
+
+# Android Studio
+/android-studio/
