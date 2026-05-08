@@ -196,11 +196,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateBookmarkFavicon(url: String) {
         viewModelScope.launch {
             val host = try { java.net.URI(url).host } catch (_: Exception) { return@launch }
+            if (host.isNullOrEmpty()) return@launch
             val matching = bookmarks.value.find { bm ->
                 try { java.net.URI(bm.url).host == host } catch (_: Exception) { false }
             }
             if (matching != null && matching.iconUrl.isEmpty()) {
-                val faviconUrl = "https://favicon.im/$host"
+                val faviconUrl = "https://$host/favicon.ico"
                 bookmarkDao.update(matching.copy(iconUrl = faviconUrl))
             }
         }

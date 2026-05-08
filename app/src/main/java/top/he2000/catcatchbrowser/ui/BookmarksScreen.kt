@@ -21,6 +21,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
 import top.he2000.catcatchbrowser.data.BookmarkEntity
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -74,6 +76,8 @@ private fun BookmarkItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
+    val context = LocalContext.current
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
@@ -93,7 +97,10 @@ private fun BookmarkItem(
         ) {
             if (bookmark.iconUrl.isNotEmpty()) {
                 AsyncImage(
-                    model = bookmark.iconUrl,
+                    model = ImageRequest.Builder(context)
+                        .data(bookmark.iconUrl)
+                        .crossfade(true)
+                        .build(),
                     contentDescription = bookmark.title,
                     modifier = Modifier.size(28.dp),
                     contentScale = ContentScale.Fit

@@ -2,6 +2,7 @@ package top.he2000.catcatchbrowser.ui
 
 import android.annotation.SuppressLint
 import android.webkit.*
+import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
@@ -12,6 +13,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import kotlinx.coroutines.launch
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -38,6 +41,8 @@ fun WindowsScreen(viewModel: MainViewModel) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var showAddBookmarkDialog by remember { mutableStateOf(false) }
     var editingBookmark by remember { mutableStateOf<BookmarkEntity?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
 
     // 侧边栏动画状态
     val sidebarOffsetX by animateFloatAsState(
@@ -54,7 +59,10 @@ fun WindowsScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
     val bridge = remember { viewModel.getBridge() }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { padding ->
+    Box(modifier = Modifier.fillMaxSize().padding(padding)) {
         // 主内容：工具栏 + 内容区
         Column(modifier = Modifier.fillMaxSize()) {
             // 工具栏（固定高度）
@@ -99,8 +107,135 @@ fun WindowsScreen(viewModel: MainViewModel) {
 
             // 内容区：书签首页 或 WebView
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                // WebView（始终在composition中，通过alpha控制可见性）
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            setBackgroundColor(0xFFFFFFFF.toInt())
+
+                            settings.apply {
+                                javaScriptEnabled = true
+                                domStorageEnabled = true
+                                setSupportZoom(true)
+                                builtInZoomControls = true
+                                displayZoomControls = false
+                                loadWithOverviewMode = true
+                                useWideViewPort = true
+                                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                allowFileAccess = true
+                                allowContentAccess = true
+                                cacheMode = WebSettings.LOAD_DEFAULT
+                            }
+
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                    super.onPageStarted(view, url, favicon)
+                                    url?.let { viewModel.updateCurrentWindowUrl(it) }
+                                    viewModel.updateNavigationState(
+                                        view?.canGoBack() ?: false,
+                                        view?.canGoForward() ?: false
+                                    )
+                                }
+
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    super.onPageFinished(view, url)
+                                    view?.title?.let { viewModel.updateCurrentWindowTitle(it) }
+                                    url?.let { viewModel.updateBookmarkFavicon(it) }
+                                    viewModel.updateNavigationState(
+                                        view?.canGoBack() ?: false,
+                                        view?.canGoForward() ?: false
+                                    )
+                                    try {
+                                        val script = ctx.assets.open("sniffer.js").bufferedReader().use { it.readText() }
+                                        view?.evaluateJavascript(script, null)
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
+
+                                override fun onReceivedError(
+                                    view: WebView?,
+                                    request: WebResourceRequest?,
+                                    error: WebResourceError?
+                                ) {
+                                    if (request?.isForMainFrame == true) {
+                                        val description = error?.description?.toString() ?: "页面加载失败"
+                                        viewModel.updatePageError(description)
+                                    }
+                                }
+
+                                override fun shouldInterceptRequest(
+                                    view: WebView?,
+                                    request: WebResourceRequest?
+                                ): WebResourceResponse? {
+                                    request?.url?.toString()?.let { url ->
+                                        if (url.contains(".m3u8")) {
+                                            // 通过bridge处理嗅探结果
+                                        }
+                                    }
+                                    return super.shouldInterceptRequest(view, request)
+                                }
+                            }
+
+                            webChromeClient = object : WebChromeClient() {
+                                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                    viewModel.updatePageProgress(newProgress)
+                                }
+                            }
+
+                            addJavascriptInterface(bridge, "SnifferBridge")
+
+                            webView = this
+                        }
+                    },
+                    update = { wv ->
+                        val url = currentUrl
+                        if (url.isNotEmpty() && url != MainViewModel.HOME_URL && url != wv.url) {
+                            wv.loadUrl(url)
+                        }
+                        viewModel.updateNavigationState(wv.canGoBack(), wv.canGoForward())
+                    },
+                    modifier = Modifier.fillMaxSize().alpha(if (isHomePage) 0f else 1f)
+                )
+
+                // 错误页面覆盖
+                if (!isHomePage && currentWindow?.hasError == true) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.surface
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "页面加载失败",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                currentWindow.errorMessage,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            FilledTonalButton(onClick = { webView?.reload() }) {
+                                Text("重试")
+                            }
+                        }
+                    }
+                }
+
+                // 书签首页
                 if (isHomePage) {
-                    // 书签首页
                     BookmarksScreen(
                         bookmarks = bookmarks,
                         onBookmarkClick = { bookmark ->
@@ -112,133 +247,6 @@ fun WindowsScreen(viewModel: MainViewModel) {
                         },
                         onAddClick = { showAddBookmarkDialog = true }
                     )
-                } else {
-                    // WebView
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                setBackgroundColor(0xFFFFFFFF.toInt())
-
-                                settings.apply {
-                                    javaScriptEnabled = true
-                                    domStorageEnabled = true
-                                    setSupportZoom(true)
-                                    builtInZoomControls = true
-                                    displayZoomControls = false
-                                    loadWithOverviewMode = true
-                                    useWideViewPort = true
-                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                    allowFileAccess = true
-                                    allowContentAccess = true
-                                    cacheMode = WebSettings.LOAD_DEFAULT
-                                }
-
-                                webViewClient = object : WebViewClient() {
-                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                        super.onPageStarted(view, url, favicon)
-                                        url?.let { viewModel.updateCurrentWindowUrl(it) }
-                                        viewModel.updateNavigationState(
-                                            view?.canGoBack() ?: false,
-                                            view?.canGoForward() ?: false
-                                        )
-                                    }
-
-                                    override fun onPageFinished(view: WebView?, url: String?) {
-                                        super.onPageFinished(view, url)
-                                        view?.title?.let { viewModel.updateCurrentWindowTitle(it) }
-                                        url?.let { viewModel.updateBookmarkFavicon(it) }
-                                        viewModel.updateNavigationState(
-                                            view?.canGoBack() ?: false,
-                                            view?.canGoForward() ?: false
-                                        )
-                                        try {
-                                            val script = ctx.assets.open("sniffer.js").bufferedReader().use { it.readText() }
-                                            view?.evaluateJavascript(script, null)
-                                        } catch (e: Exception) {
-                                            e.printStackTrace()
-                                        }
-                                    }
-
-                                    override fun onReceivedError(
-                                        view: WebView?,
-                                        request: WebResourceRequest?,
-                                        error: WebResourceError?
-                                    ) {
-                                        if (request?.isForMainFrame == true) {
-                                            val description = error?.description?.toString() ?: "页面加载失败"
-                                            viewModel.updatePageError(description)
-                                        }
-                                    }
-
-                                    override fun shouldInterceptRequest(
-                                        view: WebView?,
-                                        request: WebResourceRequest?
-                                    ): WebResourceResponse? {
-                                        request?.url?.toString()?.let { url ->
-                                            if (url.contains(".m3u8")) {
-                                                // 通过bridge处理嗅探结果
-                                            }
-                                        }
-                                        return super.shouldInterceptRequest(view, request)
-                                    }
-                                }
-
-                                webChromeClient = object : WebChromeClient() {
-                                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                        viewModel.updatePageProgress(newProgress)
-                                    }
-                                }
-
-                                addJavascriptInterface(bridge, "SnifferBridge")
-
-                                webView = this
-                            }
-                        },
-                        update = { wv ->
-                            val url = currentUrl
-                            if (url.isNotEmpty() && url != MainViewModel.HOME_URL && url != wv.url) {
-                                wv.loadUrl(url)
-                            }
-                            viewModel.updateNavigationState(wv.canGoBack(), wv.canGoForward())
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-
-                    // 错误页面覆盖
-                    if (currentWindow?.hasError == true) {
-                        Surface(
-                            modifier = Modifier.fillMaxSize(),
-                            color = MaterialTheme.colorScheme.surface
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxSize().padding(32.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.ErrorOutline,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(64.dp),
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Text(
-                                    "页面加载失败",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    currentWindow.errorMessage,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                FilledTonalButton(onClick = { webView?.reload() }) {
-                                    Text("重试")
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -281,6 +289,9 @@ fun WindowsScreen(viewModel: MainViewModel) {
                 onNewWindow = {
                     viewModel.addNewWindow()
                     showSidebar = false
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("新标签已创建", duration = SnackbarDuration.Short)
+                    }
                 },
                 onDismiss = { showSidebar = false }
             )
@@ -299,34 +310,35 @@ fun WindowsScreen(viewModel: MainViewModel) {
         }
     }
 
-    // 添加书签对话框
-    if (showAddBookmarkDialog) {
-        BookmarkDialog(
-            title = "添加书签",
-            onConfirm = { name, url ->
-                viewModel.addBookmark(name, url)
-                showAddBookmarkDialog = false
-            },
-            onDismiss = { showAddBookmarkDialog = false }
-        )
-    }
+        // 添加书签对话框
+        if (showAddBookmarkDialog) {
+            BookmarkDialog(
+                title = "添加书签",
+                onConfirm = { name, url ->
+                    viewModel.addBookmark(name, url)
+                    showAddBookmarkDialog = false
+                },
+                onDismiss = { showAddBookmarkDialog = false }
+            )
+        }
 
-    // 编辑书签对话框
-    editingBookmark?.let { bookmark ->
-        BookmarkDialog(
-            title = "编辑书签",
-            initialName = bookmark.title,
-            initialUrl = bookmark.url,
-            onConfirm = { name, url ->
-                viewModel.updateBookmark(bookmark.copy(title = name, url = url))
-                editingBookmark = null
-            },
-            onDelete = {
-                viewModel.deleteBookmark(bookmark)
-                editingBookmark = null
-            },
-            onDismiss = { editingBookmark = null }
-        )
+        // 编辑书签对话框
+        editingBookmark?.let { bookmark ->
+            BookmarkDialog(
+                title = "编辑书签",
+                initialName = bookmark.title,
+                initialUrl = bookmark.url,
+                onConfirm = { name, url ->
+                    viewModel.updateBookmark(bookmark.copy(title = name, url = url))
+                    editingBookmark = null
+                },
+                onDelete = {
+                    viewModel.deleteBookmark(bookmark)
+                    editingBookmark = null
+                },
+                onDismiss = { editingBookmark = null }
+            )
+        }
     }
 }
 
