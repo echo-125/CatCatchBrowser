@@ -11,7 +11,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -109,21 +109,47 @@ private fun WindowListItemSwipeable(
     onClick: () -> Unit,
     onClose: () -> Unit
 ) {
+    var showConfirmDialog by remember { mutableStateOf(false) }
+
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             when (value) {
                 SwipeToDismissBoxValue.EndToStart -> {
                     if (swipeEnabled) {
-                        onClose()
-                        true
+                        showConfirmDialog = true
+                        false // 不立即关闭，先显示确认对话框
                     } else {
                         false
                     }
                 }
                 else -> false
             }
-        }
+        },
+        positionalThreshold = { it * 0.6f } // 需要滑动超过 60% 才触发
     )
+
+    if (showConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showConfirmDialog = false },
+            title = { Text("确认关闭") },
+            text = { Text("确定要关闭此标签页吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showConfirmDialog = false
+                        onClose()
+                    }
+                ) {
+                    Text("关闭", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     SwipeToDismissBox(
         state = dismissState,
