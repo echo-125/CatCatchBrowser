@@ -1,5 +1,6 @@
 package top.he2000.catcatchbrowser.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +20,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -57,22 +59,24 @@ fun BrowserToolbar(
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box {
-            IconButton(onClick = onWindowsClick) {
-                Icon(
-                    Icons.Default.Window,
-                    contentDescription = "窗口",
-                    tint = MaterialTheme.colorScheme.onSurface
+        // 窗口管理按钮：空心方形内显示数字
+        Surface(
+            onClick = onWindowsClick,
+            shape = RoundedCornerShape(4.dp),
+            border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.onSurface),
+            modifier = Modifier.size(36.dp)
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "$windowCount",
+                    fontSize = 13.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center
                 )
-            }
-            if (windowCount > 0) {
-                Badge(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .offset(x = (-4).dp, y = 4.dp)
-                ) {
-                    Text("$windowCount")
-                }
             }
         }
 
