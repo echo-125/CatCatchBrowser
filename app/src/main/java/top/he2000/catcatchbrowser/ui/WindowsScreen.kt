@@ -33,9 +33,9 @@ fun WindowsScreen(viewModel: MainViewModel) {
     val bridge = remember { viewModel.getBridge() }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // 主内容
-        Column {
-            // 工具栏
+        // 主内容：工具栏 + WebView
+        Column(modifier = Modifier.fillMaxSize()) {
+            // 工具栏（固定高度）
             BrowserToolbar(
                 url = currentUrl,
                 windowCount = windows.size,
@@ -57,72 +57,77 @@ fun WindowsScreen(viewModel: MainViewModel) {
                 }
             )
 
-            // WebView容器
-            AndroidView(
-                factory = { context ->
-                    WebView(context).apply {
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            setSupportZoom(true)
-                            builtInZoomControls = true
-                            displayZoomControls = false
-                            loadWithOverviewMode = true
-                            useWideViewPort = true
-                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            allowFileAccess = true
-                            allowContentAccess = true
-                            cacheMode = WebSettings.LOAD_DEFAULT
-                        }
+            // WebView容器（用Box包裹，确保fillMaxSize生效）
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            setBackgroundColor(0xFFFFFFFF.toInt())
 
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                super.onPageStarted(view, url, favicon)
-                                url?.let { viewModel.updateCurrentWindowUrl(it) }
+                            settings.apply {
+                                javaScriptEnabled = true
+                                domStorageEnabled = true
+                                setSupportZoom(true)
+                                builtInZoomControls = true
+                                displayZoomControls = false
+                                loadWithOverviewMode = true
+                                useWideViewPort = true
+                                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                allowFileAccess = true
+                                allowContentAccess = true
+                                cacheMode = WebSettings.LOAD_DEFAULT
                             }
 
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                super.onPageFinished(view, url)
-                                view?.title?.let { viewModel.updateCurrentWindowTitle(it) }
-                                // 注入嗅探脚本
-                                try {
-                                    val script = context.assets.open("sniffer.js").bufferedReader().use { it.readText() }
-                                    view?.evaluateJavascript(script, null)
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                    super.onPageStarted(view, url, favicon)
+                                    url?.let { viewModel.updateCurrentWindowUrl(it) }
                                 }
-                            }
 
-                            override fun shouldInterceptRequest(
-                                view: WebView?,
-                                request: WebResourceRequest?
-                            ): WebResourceResponse? {
-                                request?.url?.toString()?.let { url ->
-                                    if (url.contains(".m3u8")) {
-                                        // 通过bridge处理嗅探结果
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    super.onPageFinished(view, url)
+                                    view?.title?.let { viewModel.updateCurrentWindowTitle(it) }
+                                    try {
+                                        val script = ctx.assets.open("sniffer.js").bufferedReader().use { it.readText() }
+                                        view?.evaluateJavascript(script, null)
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
                                     }
                                 }
-                                return super.shouldInterceptRequest(view, request)
+
+                                override fun shouldInterceptRequest(
+                                    view: WebView?,
+                                    request: WebResourceRequest?
+                                ): WebResourceResponse? {
+                                    request?.url?.toString()?.let { url ->
+                                        if (url.contains(".m3u8")) {
+                                            // 通过bridge处理嗅探结果
+                                        }
+                                    }
+                                    return super.shouldInterceptRequest(view, request)
+                                }
                             }
-                        }
 
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                // 进度更新
+                            webChromeClient = object : WebChromeClient() {
+                                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                    // 进度更新
+                                }
                             }
+
+                            addJavascriptInterface(bridge, "SnifferBridge")
+
+                            webView = this
                         }
-
-                        addJavascriptInterface(bridge, "SnifferBridge")
-
-                        if (currentUrl.isNotEmpty()) {
-                            loadUrl(currentUrl)
+                    },
+                    update = { wv ->
+                        val url = currentUrl
+                        if (url.isNotEmpty() && url != wv.url) {
+                            wv.loadUrl(url)
                         }
-
-                        webView = this
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
 
         // 悬浮嗅探按钮

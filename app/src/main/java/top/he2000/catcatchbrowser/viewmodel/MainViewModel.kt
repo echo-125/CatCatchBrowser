@@ -46,10 +46,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         // 添加默认窗口
-        addNewWindow("https://www.baidu.com")
+        addNewWindow()
     }
 
-    fun addNewWindow(url: String = "") {
+    fun addNewWindow(url: String = "https://www.baidu.com") {
         val newWindow = BrowserWindow(
             title = "空白页",
             url = url,
