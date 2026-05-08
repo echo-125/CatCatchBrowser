@@ -22,66 +22,70 @@ import top.he2000.catcatchbrowser.viewmodel.MainViewModel
 fun DownloadedScreen(viewModel: MainViewModel) {
     val tasks by viewModel.completedTasks.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // 顶部栏
-        TopAppBar(
-            title = {
-                Text(
-                    "已下载",
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            actions = {
-                if (tasks.isNotEmpty()) {
-                    IconButton(onClick = { viewModel.clearCompleted() }) {
-                        Icon(
-                            Icons.Default.DeleteSweep,
-                            contentDescription = "清除已完成"
-                        )
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "已下载",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                actions = {
+                    if (tasks.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.clearCompleted() }) {
+                            Icon(
+                                Icons.Default.DeleteSweep,
+                                contentDescription = "清除已完成"
+                            )
+                        }
                     }
                 }
-            }
-        )
-
-        if (tasks.isEmpty()) {
-            // 空状态
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    Icons.Default.Folder,
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    "暂无已完成的下载",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "下载完成后会显示在这里",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        } else {
-            // 任务列表
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 8.dp)
-            ) {
-                items(tasks) { task ->
-                    DownloadedItem(
-                        task = task,
-                        onDelete = { viewModel.deleteTask(task.id) }
+            )
+        },
+        contentWindowInsets = WindowInsets(0.dp)
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (tasks.isEmpty()) {
+                // 空状态
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        Icons.Default.Folder,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "暂无已完成的下载",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "下载完成后会显示在这里",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                // 任务列表
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    items(tasks) { task ->
+                        DownloadedItem(
+                            task = task,
+                            onDelete = { viewModel.deleteTask(task.id) }
+                        )
+                    }
                 }
             }
         }

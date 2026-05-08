@@ -22,69 +22,73 @@ import top.he2000.catcatchbrowser.viewmodel.MainViewModel
 fun DownloadingScreen(viewModel: MainViewModel) {
     val tasks by viewModel.downloadingTasks.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // 顶部栏
-        TopAppBar(
-            title = {
-                Text(
-                    "下载中",
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            actions = {
-                if (tasks.isNotEmpty()) {
-                    IconButton(onClick = { viewModel.pauseAll() }) {
-                        Icon(
-                            Icons.Default.Pause,
-                            contentDescription = "全部暂停"
-                        )
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "下载中",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                actions = {
+                    if (tasks.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.pauseAll() }) {
+                            Icon(
+                                Icons.Default.Pause,
+                                contentDescription = "全部暂停"
+                            )
+                        }
                     }
                 }
-            }
-        )
-
-        if (tasks.isEmpty()) {
-            // 空状态
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    Icons.Default.Download,
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    "暂无下载任务",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "在浏览器中嗅探到M3U8链接后可添加下载",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        } else {
-            // 任务列表
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 8.dp)
-            ) {
-                items(tasks) { task ->
-                    DownloadTaskItem(
-                        task = task,
-                        onPause = { viewModel.pauseTask(task.id) },
-                        onResume = { viewModel.resumeTask(task.id) },
-                        onDelete = { viewModel.deleteTask(task.id) },
-                        onRetry = { viewModel.resumeTask(task.id) }
+            )
+        },
+        contentWindowInsets = WindowInsets(0.dp)
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (tasks.isEmpty()) {
+                // 空状态
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "暂无下载任务",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "在浏览器中嗅探到M3U8链接后可添加下载",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                // 任务列表
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    items(tasks) { task ->
+                        DownloadTaskItem(
+                            task = task,
+                            onPause = { viewModel.pauseTask(task.id) },
+                            onResume = { viewModel.resumeTask(task.id) },
+                            onDelete = { viewModel.deleteTask(task.id) },
+                            onRetry = { viewModel.resumeTask(task.id) }
+                        )
+                    }
                 }
             }
         }
