@@ -2,6 +2,8 @@ package top.he2000.catcatchbrowser.ui
 
 import android.annotation.SuppressLint
 import android.webkit.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -37,6 +39,18 @@ fun WindowsScreen(viewModel: MainViewModel) {
     var showAddBookmarkDialog by remember { mutableStateOf(false) }
     var editingBookmark by remember { mutableStateOf<BookmarkEntity?>(null) }
 
+    // 侧边栏动画状态
+    val sidebarOffsetX by animateFloatAsState(
+        targetValue = if (showSidebar) 0f else -280f,
+        animationSpec = tween(300),
+        label = "sidebarOffset"
+    )
+    val overlayAlpha by animateFloatAsState(
+        targetValue = if (showSidebar) 0.5f else 0f,
+        animationSpec = tween(300),
+        label = "overlayAlpha"
+    )
+
     val context = LocalContext.current
     val bridge = remember { viewModel.getBridge() }
 
@@ -58,7 +72,17 @@ fun WindowsScreen(viewModel: MainViewModel) {
                     val finalUrl = resolveUrlOrSearch(url)
                     viewModel.loadUrl(finalUrl)
                     webView?.loadUrl(finalUrl)
-                }
+                },
+                onNewTab = { viewModel.addNewWindow() },
+                onHistory = { /* TODO */ },
+                onAddBookmark = { showAddBookmarkDialog = true },
+                onBookmarkList = { /* TODO */ },
+                onDesktopMode = {
+                    webView?.settings?.userAgentString =
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    webView?.reload()
+                },
+                onSettings = { /* TODO */ }
             )
 
             // 进度条
@@ -86,9 +110,7 @@ fun WindowsScreen(viewModel: MainViewModel) {
                         onBookmarkLongClick = { bookmark ->
                             editingBookmark = bookmark
                         },
-                        onAddClick = {
-                            showAddBookmarkDialog = true
-                        }
+                        onAddClick = { showAddBookmarkDialog = true }
                     )
                 } else {
                     // WebView
@@ -124,6 +146,7 @@ fun WindowsScreen(viewModel: MainViewModel) {
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
                                         view?.title?.let { viewModel.updateCurrentWindowTitle(it) }
+                                        url?.let { viewModel.updateBookmarkFavicon(it) }
                                         viewModel.updateNavigationState(
                                             view?.canGoBack() ?: false,
                                             view?.canGoForward() ?: false
@@ -237,11 +260,13 @@ fun WindowsScreen(viewModel: MainViewModel) {
             }
         }
 
-        // 侧边栏
-        if (showSidebar) {
+        // 侧边栏（遮罩淡入淡出 + 面板平移）
+        if (showSidebar || sidebarOffsetX > -279f) {
             WindowSidebar(
                 windows = windows,
                 currentIndex = currentIndex,
+                sidebarOffsetX = sidebarOffsetX.dp,
+                overlayAlpha = overlayAlpha,
                 onWindowSelect = { index ->
                     viewModel.switchToWindow(index)
                     val selectedUrl = windows.getOrNull(index)?.url ?: ""

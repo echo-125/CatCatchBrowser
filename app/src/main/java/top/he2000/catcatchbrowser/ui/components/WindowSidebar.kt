@@ -1,5 +1,7 @@
 package top.he2000.catcatchbrowser.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -10,11 +12,13 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.he2000.catcatchbrowser.data.BrowserWindow
@@ -23,27 +27,29 @@ import top.he2000.catcatchbrowser.data.BrowserWindow
 fun WindowSidebar(
     windows: List<BrowserWindow>,
     currentIndex: Int,
+    sidebarOffsetX: Dp,
+    overlayAlpha: Float,
     onWindowSelect: (Int) -> Unit,
     onWindowClose: (Int) -> Unit,
     onNewWindow: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
-        // 遮罩
+        // 遮罩（淡入淡出）
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.5f))
+                .background(Color.Black.copy(alpha = overlayAlpha))
                 .clickable { onDismiss() }
         )
 
-        // 侧边栏
+        // 侧边栏（平移）
         Column(
             modifier = Modifier
+                .offset(x = sidebarOffsetX)
                 .width(280.dp)
                 .fillMaxHeight()
                 .background(MaterialTheme.colorScheme.surface)
-                .align(Alignment.CenterStart)
         ) {
             // 标题栏
             Row(

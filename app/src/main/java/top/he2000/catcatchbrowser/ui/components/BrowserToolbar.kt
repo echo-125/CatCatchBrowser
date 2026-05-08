@@ -33,10 +33,17 @@ fun BrowserToolbar(
     onBackClick: () -> Unit,
     onForwardClick: () -> Unit,
     onRefreshClick: () -> Unit,
-    onUrlSubmit: (String) -> Unit
+    onUrlSubmit: (String) -> Unit,
+    onNewTab: () -> Unit,
+    onHistory: () -> Unit,
+    onAddBookmark: () -> Unit,
+    onBookmarkList: () -> Unit,
+    onDesktopMode: () -> Unit,
+    onSettings: () -> Unit
 ) {
     val focusManager = LocalFocusManager.current
     var textValue by remember(url) { mutableStateOf(url) }
+    var showMenu by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -163,6 +170,48 @@ fun BrowserToolbar(
                     MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                 }
             )
+        }
+
+        // 菜单按钮
+        Box {
+            IconButton(onClick = { showMenu = true }) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "菜单",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("新建标签") },
+                    onClick = { showMenu = false; onNewTab() }
+                )
+                DropdownMenuItem(
+                    text = { Text("历史记录") },
+                    onClick = { showMenu = false; onHistory() }
+                )
+                DropdownMenuItem(
+                    text = { Text("添加书签") },
+                    onClick = { showMenu = false; onAddBookmark() }
+                )
+                DropdownMenuItem(
+                    text = { Text("书签列表") },
+                    onClick = { showMenu = false; onBookmarkList() }
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("电脑版网页") },
+                    onClick = { showMenu = false; onDesktopMode() }
+                )
+                DropdownMenuItem(
+                    text = { Text("设置") },
+                    onClick = { showMenu = false; onSettings() }
+                )
+            }
         }
     }
 }

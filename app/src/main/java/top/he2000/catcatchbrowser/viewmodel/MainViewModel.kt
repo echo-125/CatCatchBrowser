@@ -176,12 +176,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // 书签操作
     fun addBookmark(title: String, url: String) {
         viewModelScope.launch {
-            val faviconUrl = "https://www.google.com/s2/favicons?domain=${java.net.URI(url).host}&sz=64"
             bookmarkDao.insert(
                 BookmarkEntity(
                     title = title,
                     url = url,
-                    iconUrl = faviconUrl,
+                    iconUrl = "",
                     sortOrder = bookmarks.value.size
                 )
             )
@@ -190,8 +189,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateBookmark(bookmark: BookmarkEntity) {
         viewModelScope.launch {
-            val faviconUrl = "https://www.google.com/s2/favicons?domain=${java.net.URI(bookmark.url).host}&sz=64"
-            bookmarkDao.update(bookmark.copy(iconUrl = faviconUrl))
+            bookmarkDao.update(bookmark)
+        }
+    }
+
+    fun updateBookmarkFavicon(url: String) {
+        viewModelScope.launch {
+            val host = try { java.net.URI(url).host } catch (_: Exception) { return@launch }
+            val matching = bookmarks.value.find { bm ->
+                try { java.net.URI(bm.url).host == host } catch (_: Exception) { false }
+            }
+            if (matching != null && matching.iconUrl.isEmpty()) {
+                val faviconUrl = "https://favicon.im/$host"
+                bookmarkDao.update(matching.copy(iconUrl = faviconUrl))
+            }
         }
     }
 
