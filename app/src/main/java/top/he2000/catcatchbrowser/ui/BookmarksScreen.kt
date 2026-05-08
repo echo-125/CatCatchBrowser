@@ -175,8 +175,8 @@ fun BookmarkDialog(
     onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
-    var name by remember { mutableStateOf(initialName) }
-    var url by remember { mutableStateOf(initialUrl) }
+    var name by remember(initialName, initialUrl) { mutableStateOf(initialName) }
+    var url by remember(initialName, initialUrl) { mutableStateOf(initialUrl) }
 
     AlertDialog(
         onDismissRequest = onDismiss,

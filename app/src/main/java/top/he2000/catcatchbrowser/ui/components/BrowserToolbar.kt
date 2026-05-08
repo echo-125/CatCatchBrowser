@@ -28,6 +28,7 @@ fun BrowserToolbar(
     windowCount: Int,
     canGoBack: Boolean = false,
     canGoForward: Boolean = false,
+    isDesktopSite: Boolean,
     onWindowsClick: () -> Unit,
     onHomeClick: () -> Unit,
     onBackClick: () -> Unit,
@@ -38,8 +39,13 @@ fun BrowserToolbar(
     onHistory: () -> Unit,
     onAddBookmark: () -> Unit,
     onBookmarkList: () -> Unit,
-    onDesktopMode: () -> Unit,
-    onSettings: () -> Unit
+    onDesktopSiteChange: (Boolean) -> Unit,
+    onShare: () -> Unit,
+    onCopyLink: () -> Unit,
+    onClearHistory: () -> Unit,
+    onOpenInBrowser: () -> Unit,
+    onSettings: () -> Unit,
+    canShareCurrentPage: Boolean
 ) {
     val focusManager = LocalFocusManager.current
     var textValue by remember(url) { mutableStateOf(url) }
@@ -53,7 +59,6 @@ fun BrowserToolbar(
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 窗口按钮
         Box {
             IconButton(onClick = onWindowsClick) {
                 Icon(
@@ -62,7 +67,6 @@ fun BrowserToolbar(
                     tint = MaterialTheme.colorScheme.onSurface
                 )
             }
-            // 窗口数量角标
             if (windowCount > 0) {
                 Badge(
                     modifier = Modifier
@@ -74,7 +78,6 @@ fun BrowserToolbar(
             }
         }
 
-        // 首页按钮
         IconButton(onClick = onHomeClick) {
             Icon(
                 Icons.Default.Home,
@@ -83,7 +86,6 @@ fun BrowserToolbar(
             )
         }
 
-        // 网址栏
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -125,7 +127,6 @@ fun BrowserToolbar(
                     }
                 )
 
-                // 刷新按钮
                 IconButton(
                     onClick = onRefreshClick,
                     modifier = Modifier.size(32.dp)
@@ -140,7 +141,6 @@ fun BrowserToolbar(
             }
         }
 
-        // 返回按钮
         IconButton(
             onClick = onBackClick,
             enabled = canGoBack
@@ -156,7 +156,6 @@ fun BrowserToolbar(
             )
         }
 
-        // 前进按钮
         IconButton(
             onClick = onForwardClick,
             enabled = canGoForward
@@ -172,7 +171,6 @@ fun BrowserToolbar(
             )
         }
 
-        // 菜单按钮
         Box {
             IconButton(onClick = { showMenu = true }) {
                 Icon(
@@ -188,28 +186,86 @@ fun BrowserToolbar(
             ) {
                 DropdownMenuItem(
                     text = { Text("新建标签") },
-                    onClick = { showMenu = false; onNewTab() }
+                    onClick = {
+                        showMenu = false
+                        onNewTab()
+                    }
                 )
                 DropdownMenuItem(
                     text = { Text("历史记录") },
-                    onClick = { showMenu = false; onHistory() }
+                    onClick = {
+                        showMenu = false
+                        onHistory()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("清除历史记录") },
+                    onClick = {
+                        showMenu = false
+                        onClearHistory()
+                    }
                 )
                 DropdownMenuItem(
                     text = { Text("添加书签") },
-                    onClick = { showMenu = false; onAddBookmark() }
+                    onClick = {
+                        showMenu = false
+                        onAddBookmark()
+                    }
                 )
                 DropdownMenuItem(
                     text = { Text("书签列表") },
-                    onClick = { showMenu = false; onBookmarkList() }
+                    onClick = {
+                        showMenu = false
+                        onBookmarkList()
+                    }
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("电脑版网页") },
-                    onClick = { showMenu = false; onDesktopMode() }
+                    text = { Text("桌面版网站") },
+                    onClick = {
+                        showMenu = false
+                        onDesktopSiteChange(!isDesktopSite)
+                    },
+                    trailingIcon = {
+                        Switch(
+                            checked = isDesktopSite,
+                            onCheckedChange = null,
+                            modifier = Modifier.height(24.dp)
+                        )
+                    }
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("分享") },
+                    onClick = {
+                        showMenu = false
+                        onShare()
+                    },
+                    enabled = canShareCurrentPage
                 )
                 DropdownMenuItem(
+                    text = { Text("复制链接") },
+                    onClick = {
+                        showMenu = false
+                        onCopyLink()
+                    },
+                    enabled = canShareCurrentPage
+                )
+                DropdownMenuItem(
+                    text = { Text("在浏览器中打开") },
+                    onClick = {
+                        showMenu = false
+                        onOpenInBrowser()
+                    },
+                    enabled = canShareCurrentPage
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
                     text = { Text("设置") },
-                    onClick = { showMenu = false; onSettings() }
+                    onClick = {
+                        showMenu = false
+                        onSettings()
+                    }
                 )
             }
         }

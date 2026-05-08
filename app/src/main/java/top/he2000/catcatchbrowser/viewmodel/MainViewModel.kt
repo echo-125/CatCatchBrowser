@@ -1,24 +1,32 @@
 package top.he2000.catcatchbrowser.viewmodel
 
 import android.app.Application
+import android.webkit.CookieManager
+import android.webkit.WebStorage
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import top.he2000.catcatchbrowser.data.*
 import top.he2000.catcatchbrowser.downloader.TaskManager
-import top.he2000.catcatchbrowser.sniffer.M3u8Sniffer
 import top.he2000.catcatchbrowser.sniffer.SnifferBridge
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         const val HOME_URL = "about:bookmarks"
+
+        const val DESKTOP_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
     private val taskManager = TaskManager(application)
     private val bridge = SnifferBridge()
     private val bookmarkDao = AppDatabase.getInstance(application).bookmarkDao()
+    private val historyDao = AppDatabase.getInstance(application).historyDao()
+    private val userPrefs = UserPreferencesRepository.getInstance(application)
 
     // 窗口状态
     private val _windows = MutableStateFlow<List<BrowserWindow>>(emptyList())
@@ -26,6 +34,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _currentWindowIndex = MutableStateFlow(0)
     val currentWindowIndex: StateFlow<Int> = _currentWindowIndex.asStateFlow()
+
+    @Volatile
+    private var cachedDefaultUserAgent: String? = null
 
     // 下载状态
     val allTasks: StateFlow<List<DownloadTaskEntity>> = taskManager.observeAllTasks()
@@ -42,21 +53,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         tasks.filter { it.status == TaskStatus.COMPLETED.name.lowercase() }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // 嗅探结果
     val sniffedUrls: StateFlow<List<SniffedM3u8>> = bridge.sniffedUrls
 
-    // 书签
     val bookmarks: StateFlow<List<BookmarkEntity>> = bookmarkDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // 当前URL
+    val historyEntries: StateFlow<List<HistoryEntity>> = historyDao.observeRecent()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val desktopSite: StateFlow<Boolean> = userPrefs.desktopSite
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val homepageUrlSetting: StateFlow<String> = userPrefs.homepageUrl
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    val searchTemplate: StateFlow<String> = userPrefs.searchTemplate
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            UserPreferencesRepository.DEFAULT_SEARCH_TEMPLATE
+        )
+
     private val _currentUrl = MutableStateFlow("")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
 
     init {
-        // 添加默认窗口
         addNewWindow()
     }
+
+    fun cacheDefaultUserAgentIfNeeded(ua: String) {
+        if (cachedDefaultUserAgent == null) {
+            cachedDefaultUserAgent = ua
+        }
+    }
+
+    fun getCachedDefaultUserAgent(): String? = cachedDefaultUserAgent
 
     fun addNewWindow(url: String = HOME_URL) {
         val newWindow = BrowserWindow(
@@ -103,12 +134,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val index = _currentWindowIndex.value
         if (index in _windows.value.indices) {
             _windows.value = _windows.value.toMutableList().apply {
-                set(index, get(index).copy(
-                    url = url,
-                    hasError = false,
-                    isLoading = true,
-                    loadProgress = 0
-                ))
+                set(
+                    index,
+                    get(index).copy(
+                        url = url,
+                        hasError = false,
+                        isLoading = true,
+                        loadProgress = 0
+                    )
+                )
             }
             _currentUrl.value = url
         }
@@ -127,11 +161,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val index = _currentWindowIndex.value
         if (index in _windows.value.indices) {
             _windows.value = _windows.value.toMutableList().apply {
-                set(index, get(index).copy(
-                    isLoading = progress < 100,
-                    loadProgress = progress,
-                    hasError = false
-                ))
+                set(
+                    index,
+                    get(index).copy(
+                        isLoading = progress < 100,
+                        loadProgress = progress,
+                        hasError = false
+                    )
+                )
             }
         }
     }
@@ -140,10 +177,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val index = _currentWindowIndex.value
         if (index in _windows.value.indices) {
             _windows.value = _windows.value.toMutableList().apply {
-                set(index, get(index).copy(
-                    canGoBack = canGoBack,
-                    canGoForward = canGoForward
-                ))
+                set(
+                    index,
+                    get(index).copy(
+                        canGoBack = canGoBack,
+                        canGoForward = canGoForward
+                    )
+                )
             }
         }
     }
@@ -152,38 +192,96 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val index = _currentWindowIndex.value
         if (index in _windows.value.indices) {
             _windows.value = _windows.value.toMutableList().apply {
-                set(index, get(index).copy(
-                    isLoading = false,
-                    hasError = true,
-                    errorMessage = description
-                ))
+                set(
+                    index,
+                    get(index).copy(
+                        isLoading = false,
+                        hasError = true,
+                        errorMessage = description
+                    )
+                )
             }
         }
     }
 
     fun loadUrl(url: String) {
-        var finalUrl = url
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            finalUrl = "https://$url"
+        val finalUrl = when {
+            url.startsWith("http://") || url.startsWith("https://") -> url
+            url.startsWith("about:") -> url
+            else -> "https://$url"
         }
         updateCurrentWindowUrl(finalUrl)
     }
 
     fun loadHome() {
+        val hp = homepageUrlSetting.value.ifBlank { HOME_URL }
+        updateCurrentWindowUrl(hp)
+    }
+
+    /** 菜单「书签列表」：始终进入内置书签页，不受自定义首页影响 */
+    fun openBookmarksHome() {
         updateCurrentWindowUrl(HOME_URL)
     }
 
-    // 书签操作
-    fun addBookmark(title: String, url: String) {
+    fun setDesktopSite(enabled: Boolean) {
         viewModelScope.launch {
+            userPrefs.setDesktopSite(enabled)
+        }
+    }
+
+    fun setHomepageUrlSetting(url: String) {
+        viewModelScope.launch {
+            userPrefs.setHomepageUrl(url.trim())
+        }
+    }
+
+    fun setSearchTemplateSetting(template: String) {
+        viewModelScope.launch {
+            userPrefs.setSearchTemplate(template.trim())
+        }
+    }
+
+    fun recordHistoryVisit(title: String, url: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                historyDao.recordVisit(title.ifBlank { url }, url)
+            }
+        }
+    }
+
+    fun clearAllHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyDao.clearAll()
+        }
+    }
+
+    fun deleteHistoryEntry(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyDao.deleteById(id)
+        }
+    }
+
+    fun clearCookiesAndSiteStorage() {
+        viewModelScope.launch(Dispatchers.Main) {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+            WebStorage.getInstance().deleteAllData()
+        }
+    }
+
+    suspend fun addBookmark(title: String, url: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            if (bookmarkDao.getByUrl(url) != null) return@withContext false
+            val order = bookmarkDao.getAll().size
             bookmarkDao.insert(
                 BookmarkEntity(
                     title = title,
                     url = url,
                     iconUrl = "",
-                    sortOrder = bookmarks.value.size
+                    sortOrder = order
                 )
             )
+            true
         }
     }
 
@@ -195,10 +293,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateBookmarkFavicon(url: String) {
         viewModelScope.launch {
-            val host = try { java.net.URI(url).host } catch (_: Exception) { return@launch }
+            val host = try {
+                java.net.URI(url).host
+            } catch (_: Exception) {
+                return@launch
+            }
             if (host.isNullOrEmpty()) return@launch
             val matching = bookmarks.value.find { bm ->
-                try { java.net.URI(bm.url).host == host } catch (_: Exception) { false }
+                try {
+                    java.net.URI(bm.url).host == host
+                } catch (_: Exception) {
+                    false
+                }
             }
             if (matching != null && matching.iconUrl.isEmpty()) {
                 val faviconUrl = "https://$host/favicon.ico"
@@ -213,13 +319,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // 下载任务操作
     fun createDownloadTask(sniffed: SniffedM3u8) {
         viewModelScope.launch {
             val fileName = sniffed.title ?: "video_${System.currentTimeMillis()}"
-            val savePath = getApplication<android.app.Application>()
+            val savePath = getApplication<Application>()
                 .getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES)?.absolutePath
-                ?: getApplication<android.app.Application>().filesDir.absolutePath
+                ?: getApplication<Application>().filesDir.absolutePath
 
             taskManager.createTask(
                 url = sniffed.url,

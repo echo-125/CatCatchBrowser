@@ -3,10 +3,12 @@ package top.he2000.catcatchbrowser.ui
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import top.he2000.catcatchbrowser.ui.navigation.BottomNavigationBar
 import top.he2000.catcatchbrowser.ui.navigation.Screen
@@ -15,10 +17,14 @@ import top.he2000.catcatchbrowser.viewmodel.MainViewModel
 @Composable
 fun MainScreen(viewModel: MainViewModel = viewModel()) {
     val navController = rememberNavController()
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
 
     Scaffold(
         bottomBar = {
-            BottomNavigationBar(navController)
+            if (currentRoute != Screen.Settings.route) {
+                BottomNavigationBar(navController)
+            }
         }
     ) { padding ->
         NavHost(
@@ -27,13 +33,19 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
             modifier = Modifier.padding(padding)
         ) {
             composable(Screen.Windows.route) {
-                WindowsScreen(viewModel)
+                WindowsScreen(viewModel = viewModel, navController = navController)
             }
             composable(Screen.Downloading.route) {
                 DownloadingScreen(viewModel)
             }
             composable(Screen.Downloaded.route) {
                 DownloadedScreen(viewModel)
+            }
+            composable(Screen.Settings.route) {
+                SettingsScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() }
+                )
             }
         }
     }

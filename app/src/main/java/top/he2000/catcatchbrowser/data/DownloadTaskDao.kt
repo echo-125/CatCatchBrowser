@@ -75,12 +75,68 @@ interface BookmarkDao {
 
     @Query("DELETE FROM bookmarks WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("SELECT * FROM bookmarks WHERE url = :url LIMIT 1")
+    suspend fun getByUrl(url: String): BookmarkEntity?
 }
 
-@Database(entities = [DownloadTaskEntity::class, BookmarkEntity::class], version = 2, exportSchema = false)
+@Entity(
+    tableName = "history",
+    indices = [Index(value = ["url"], unique = true)]
+)
+data class HistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val url: String,
+    val visitedAt: Long = System.currentTimeMillis()
+)
+
+@Dao
+interface HistoryDao {
+    @Query("SELECT * FROM history ORDER BY visitedAt DESC LIMIT 500")
+    fun observeRecent(): Flow<List<HistoryEntity>>
+
+    @Query("SELECT * FROM history WHERE url = :url LIMIT 1")
+    suspend fun getByUrl(url: String): HistoryEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrReplace(entity: HistoryEntity): Long
+
+    @Query("DELETE FROM history WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM history")
+    suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM history")
+    suspend fun countAll(): Int
+
+    @Query("DELETE FROM history WHERE id IN (SELECT id FROM history ORDER BY visitedAt ASC LIMIT :n)")
+    suspend fun deleteOldest(n: Int)
+
+    @Transaction
+    suspend fun recordVisit(title: String, url: String) {
+        val now = System.currentTimeMillis()
+        // 使用 INSERT OR REPLACE 避免竞态条件
+        insertOrReplace(HistoryEntity(title = title, url = url, visitedAt = now))
+        // 清理旧记录
+        val count = countAll()
+        val maxEntries = 500
+        if (count > maxEntries) {
+            deleteOldest(count - maxEntries)
+        }
+    }
+}
+
+@Database(
+    entities = [DownloadTaskEntity::class, BookmarkEntity::class, HistoryEntity::class],
+    version = 3,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun downloadTaskDao(): DownloadTaskDao
     abstract fun bookmarkDao(): BookmarkDao
+    abstract fun historyDao(): HistoryDao
 
     companion object {
         @Volatile
@@ -101,6 +157,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        title TEXT NOT NULL,
+                        url TEXT NOT NULL,
+                        visitedAt INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_history_url ON history(url)")
+            }
+        }
+
         fun getInstance(context: android.content.Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -108,7 +180,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "catcatchbrowser.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

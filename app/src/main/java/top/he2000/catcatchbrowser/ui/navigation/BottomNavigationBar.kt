@@ -12,7 +12,7 @@ fun BottomNavigationBar(navController: NavController) {
     val currentRoute = navBackStackEntry?.destination?.route
 
     NavigationBar {
-        Screen.screens.forEach { screen ->
+        Screen.bottomNavScreens.forEach { screen ->
             NavigationBarItem(
                 icon = {
                     Icon(

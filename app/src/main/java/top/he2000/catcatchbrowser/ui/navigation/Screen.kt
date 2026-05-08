@@ -3,6 +3,7 @@ package top.he2000.catcatchbrowser.ui.navigation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Window
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -29,7 +30,13 @@ sealed class Screen(
         icon = Icons.Default.Folder
     )
 
+    data object Settings : Screen(
+        route = "settings",
+        title = "设置",
+        icon = Icons.Default.Settings
+    )
+
     companion object {
-        val screens = listOf(Windows, Downloading, Downloaded)
+        val bottomNavScreens = listOf(Windows, Downloading, Downloaded)
     }
 }
