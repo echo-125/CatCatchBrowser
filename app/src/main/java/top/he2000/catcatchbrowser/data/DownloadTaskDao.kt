@@ -93,7 +93,7 @@ data class HistoryEntity(
 
 @Dao
 interface HistoryDao {
-    @Query("SELECT * FROM history ORDER BY visitedAt DESC LIMIT 500")
+    @Query("SELECT * FROM history ORDER BY visitedAt DESC LIMIT 2000")
     fun observeRecent(): Flow<List<HistoryEntity>>
 
     @Query("SELECT * FROM history WHERE url = :url LIMIT 1")
@@ -121,7 +121,7 @@ interface HistoryDao {
         insertOrReplace(HistoryEntity(title = title, url = url, visitedAt = now))
         // 清理旧记录
         val count = countAll()
-        val maxEntries = 500
+        val maxEntries = 2000
         if (count > maxEntries) {
             deleteOldest(count - maxEntries)
         }

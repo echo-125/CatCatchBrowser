@@ -23,8 +23,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
 import kotlinx.coroutines.launch
 import top.he2000.catcatchbrowser.data.BookmarkEntity
+import top.he2000.catcatchbrowser.ui.components.BookmarkSidebar
 import top.he2000.catcatchbrowser.ui.components.BrowserToolbar
-import top.he2000.catcatchbrowser.ui.components.HistoryBottomSheet
 import top.he2000.catcatchbrowser.ui.components.SnifferBottomSheet
 import top.he2000.catcatchbrowser.ui.components.WindowSidebar
 import top.he2000.catcatchbrowser.ui.navigation.Screen
@@ -43,22 +43,22 @@ fun WindowsScreen(
     val sniffedUrls by viewModel.sniffedUrls.collectAsState()
     val currentUrl by viewModel.currentUrl.collectAsState()
     val bookmarks by viewModel.bookmarks.collectAsState()
-    val historyEntries by viewModel.historyEntries.collectAsState()
     val desktopSite by viewModel.desktopSite.collectAsState()
     val searchTemplate by viewModel.searchTemplate.collectAsState()
+    val homepageUrlSetting by viewModel.homepageUrlSetting.collectAsState()
 
     val currentWindow = windows.getOrNull(currentIndex)
     val isHomePage = currentUrl == MainViewModel.HOME_URL
 
     var showSidebar by remember { mutableStateOf(false) }
+    var showBookmarkSidebar by remember { mutableStateOf(false) }
     var showSnifferPanel by remember { mutableStateOf(false) }
-    var showHistorySheet by remember { mutableStateOf(false) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var showAddBookmarkDialog by remember { mutableStateOf(false) }
     var editingBookmark by remember { mutableStateOf<BookmarkEntity?>(null) }
     var bookmarkDialogTitle by remember { mutableStateOf("") }
     var bookmarkDialogUrl by remember { mutableStateOf("") }
-    var showClearHistoryConfirm by remember { mutableStateOf(false) }
+    var showCloseAllWindowsConfirm by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -68,9 +68,7 @@ fun WindowsScreen(
     LaunchedEffect(desktopSite) {
         if (prevDesktop != null && prevDesktop != desktopSite) {
             webView?.let { wv ->
-                val mobile = viewModel.getCachedDefaultUserAgent() ?: return@let
-                wv.settings.userAgentString =
-                    if (desktopSite) MainViewModel.DESKTOP_USER_AGENT else mobile
+                applyWebViewUserAgent(wv, desktopSite, viewModel)
                 val u = wv.url
                 if (!u.isNullOrBlank() &&
                     u != MainViewModel.HOME_URL &&
@@ -94,9 +92,19 @@ fun WindowsScreen(
         label = "overlayAlpha"
     )
 
+    val bookmarkPanelOffsetX by animateFloatAsState(
+        targetValue = if (showBookmarkSidebar) 0f else 320f,
+        animationSpec = tween(300),
+        label = "bookmarkPanelOffset"
+    )
+    val bookmarkOverlayAlpha by animateFloatAsState(
+        targetValue = if (showBookmarkSidebar) 0.5f else 0f,
+        animationSpec = tween(300),
+        label = "bookmarkOverlayAlpha"
+    )
+
     val bridge = remember { viewModel.getBridge() }
 
-    // WebView 生命周期管理：离开页面时销毁
     DisposableEffect(Unit) {
         onDispose {
             webView?.apply {
@@ -123,7 +131,16 @@ fun WindowsScreen(
                     canGoForward = currentWindow?.canGoForward ?: false,
                     isDesktopSite = desktopSite,
                     onWindowsClick = { showSidebar = true },
-                    onHomeClick = { viewModel.loadHome() },
+                    onHomeClick = {
+                        if (viewModel.openNewTabHome()) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(
+                                    "已打开新标签首页",
+                                    duration = SnackbarDuration.Short
+                                )
+                            }
+                        }
+                    },
                     onBackClick = { webView?.goBack() },
                     onForwardClick = { webView?.goForward() },
                     onRefreshClick = { webView?.reload() },
@@ -131,19 +148,19 @@ fun WindowsScreen(
                         val finalUrl = resolveUrlOrSearch(raw, searchTemplate)
                         if (finalUrl.isNotEmpty()) {
                             viewModel.loadUrl(finalUrl)
-                            // URL 加载由 update lambda 处理，避免重复
                         }
                     },
                     onNewTab = {
-                        viewModel.addNewWindow()
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar(
-                                "新标签已创建",
-                                duration = SnackbarDuration.Short
-                            )
+                        if (viewModel.addNewWindow()) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(
+                                    "新标签已创建",
+                                    duration = SnackbarDuration.Short
+                                )
+                            }
                         }
                     },
-                    onHistory = { showHistorySheet = true },
+                    onHistory = { navController.navigate(Screen.History.route) },
                     onAddBookmark = {
                         if (!canBookmarkCurrentPage(currentUrl)) {
                             coroutineScope.launch {
@@ -155,8 +172,20 @@ fun WindowsScreen(
                             showAddBookmarkDialog = true
                         }
                     },
-                    onBookmarkList = { viewModel.openBookmarksHome() },
-                    onDesktopSiteChange = { enabled -> viewModel.setDesktopSite(enabled) },
+                    onBookmarkList = { showBookmarkSidebar = true },
+                    onDesktopSiteChange = { enabled ->
+                        viewModel.setDesktopSite(enabled)
+                        webView?.let { wv ->
+                            applyWebViewUserAgent(wv, enabled, viewModel)
+                            val u = wv.url
+                            if (!u.isNullOrBlank() &&
+                                u != MainViewModel.HOME_URL &&
+                                !u.startsWith("about:")
+                            ) {
+                                wv.reload()
+                            }
+                        }
+                    },
                     onShare = {
                         val intent = Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
@@ -171,12 +200,6 @@ fun WindowsScreen(
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar("链接已复制")
                         }
-                    },
-                    onClearHistory = { showClearHistoryConfirm = true },
-                    onOpenInBrowser = {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(currentUrl))
-                        )
                     },
                     onSettings = { navController.navigate(Screen.Settings.route) },
                     canShareCurrentPage = canShareCurrentPage
@@ -215,6 +238,7 @@ fun WindowsScreen(
                                 }
 
                                 viewModel.cacheDefaultUserAgentIfNeeded(settings.userAgentString)
+                                applyWebViewUserAgent(this, desktopSite, viewModel)
 
                                 webViewClient = object : WebViewClient() {
                                     override fun onPageStarted(
@@ -290,13 +314,7 @@ fun WindowsScreen(
                             }
                         },
                         update = { wv ->
-                            viewModel.getCachedDefaultUserAgent()?.let { mobile ->
-                                val want =
-                                    if (desktopSite) MainViewModel.DESKTOP_USER_AGENT else mobile
-                                if (wv.settings.userAgentString != want) {
-                                    wv.settings.userAgentString = want
-                                }
-                            }
+                            applyWebViewUserAgent(wv, desktopSite, viewModel)
                             val url = currentUrl
                             if (url.isNotEmpty() &&
                                 url != MainViewModel.HOME_URL &&
@@ -351,8 +369,14 @@ fun WindowsScreen(
                         BookmarksScreen(
                             bookmarks = bookmarks,
                             onBookmarkClick = { bookmark ->
-                                viewModel.loadUrl(bookmark.url)
-                                // URL 加载由 update lambda 处理
+                                if (viewModel.openUrlInNewTab(bookmark.url)) {
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar(
+                                            "已在新标签打开",
+                                            duration = SnackbarDuration.Short
+                                        )
+                                    }
+                                }
                             },
                             onBookmarkLongClick = { bookmark ->
                                 editingBookmark = bookmark
@@ -391,23 +415,48 @@ fun WindowsScreen(
                     overlayAlpha = overlayAlpha,
                     onWindowSelect = { index ->
                         viewModel.switchToWindow(index)
-                        // URL 加载由 update lambda 处理
                         showSidebar = false
                     },
                     onWindowClose = { index ->
                         viewModel.closeWindow(index)
                     },
                     onNewWindow = {
-                        viewModel.addNewWindow()
-                        showSidebar = false
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar(
-                                "新标签已创建",
-                                duration = SnackbarDuration.Short
-                            )
+                        if (viewModel.addNewWindow()) {
+                            showSidebar = false
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(
+                                    "新标签已创建",
+                                    duration = SnackbarDuration.Short
+                                )
+                            }
                         }
                     },
+                    onCloseAllWindows = { showCloseAllWindowsConfirm = true },
                     onDismiss = { showSidebar = false }
+                )
+            }
+
+            if (showBookmarkSidebar || bookmarkPanelOffsetX < 319f) {
+                BookmarkSidebar(
+                    bookmarks = bookmarks,
+                    panelOffsetX = bookmarkPanelOffsetX.dp,
+                    overlayAlpha = bookmarkOverlayAlpha,
+                    onBookmarkClick = { b ->
+                        if (viewModel.openUrlInNewTab(b.url)) {
+                            showBookmarkSidebar = false
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(
+                                    "已在新标签打开",
+                                    duration = SnackbarDuration.Short
+                                )
+                            }
+                        }
+                    },
+                    onBookmarkLongClick = { b ->
+                        editingBookmark = b
+                        showBookmarkSidebar = false
+                    },
+                    onDismiss = { showBookmarkSidebar = false }
                 )
             }
 
@@ -419,19 +468,6 @@ fun WindowsScreen(
                         showSnifferPanel = false
                     },
                     onDismiss = { showSnifferPanel = false }
-                )
-            }
-
-            if (showHistorySheet) {
-                HistoryBottomSheet(
-                    entries = historyEntries,
-                    onDismiss = { showHistorySheet = false },
-                    onOpenUrl = { url ->
-                        viewModel.loadUrl(url)
-                        // URL 加载由 update lambda 处理
-                    },
-                    onDeleteEntry = { id -> viewModel.deleteHistoryEntry(id) },
-                    onClearAll = { viewModel.clearAllHistory() }
                 )
             }
 
@@ -470,32 +506,56 @@ fun WindowsScreen(
                 )
             }
 
-            if (showClearHistoryConfirm) {
+            if (showCloseAllWindowsConfirm) {
                 AlertDialog(
-                    onDismissRequest = { showClearHistoryConfirm = false },
-                    title = { Text("清除历史记录") },
-                    text = { Text("确定删除全部浏览历史吗？") },
+                    onDismissRequest = { showCloseAllWindowsConfirm = false },
+                    title = { Text("关闭全部窗口") },
+                    text = {
+                        val desc =
+                            if (homepageUrlSetting.isBlank()) {
+                                "内置书签主页"
+                            } else {
+                                "设置中的自定义首页"
+                            }
+                        Text(
+                            "将关闭所有标签，仅保留一个新标签，起始地址与「新建标签首页」一致（当前为 $desc）。确定继续吗？"
+                        )
+                    },
                     confirmButton = {
                         TextButton(
                             onClick = {
-                                showClearHistoryConfirm = false
-                                viewModel.clearAllHistory()
+                                showCloseAllWindowsConfirm = false
+                                viewModel.closeAllWindows()
+                                showSidebar = false
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("已清空历史记录")
+                                    snackbarHostState.showSnackbar("已关闭全部窗口")
                                 }
                             }
                         ) {
-                            Text("清除", color = MaterialTheme.colorScheme.error)
+                            Text("关闭全部", color = MaterialTheme.colorScheme.error)
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showClearHistoryConfirm = false }) {
+                        TextButton(onClick = { showCloseAllWindowsConfirm = false }) {
                             Text("取消")
                         }
                     }
                 )
             }
         }
+    }
+}
+
+private fun applyWebViewUserAgent(wv: WebView, desktop: Boolean, viewModel: MainViewModel) {
+    var mobile = viewModel.getCachedDefaultUserAgent()
+    if (mobile.isNullOrEmpty()) {
+        mobile = wv.settings.userAgentString
+        viewModel.cacheDefaultUserAgentIfNeeded(mobile)
+    }
+    val target =
+        if (desktop) MainViewModel.DESKTOP_USER_AGENT else mobile
+    if (wv.settings.userAgentString != target) {
+        wv.settings.userAgentString = target
     }
 }
 

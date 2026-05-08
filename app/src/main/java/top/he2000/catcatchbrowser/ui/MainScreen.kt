@@ -2,8 +2,12 @@ package top.he2000.catcatchbrowser.ui
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -19,10 +23,18 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(viewModel) {
+        viewModel.uiMessages.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            if (currentRoute != Screen.Settings.route) {
+            if (currentRoute != Screen.Settings.route && currentRoute != Screen.History.route) {
                 BottomNavigationBar(navController)
             }
         }
@@ -40,6 +52,17 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
             }
             composable(Screen.Downloaded.route) {
                 DownloadedScreen(viewModel)
+            }
+            composable(Screen.History.route) {
+                HistoryScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() },
+                    onOpenUrl = { url ->
+                        if (viewModel.openUrlInNewTab(url)) {
+                            navController.popBackStack()
+                        }
+                    }
+                )
             }
             composable(Screen.Settings.route) {
                 SettingsScreen(

@@ -42,8 +42,6 @@ fun BrowserToolbar(
     onDesktopSiteChange: (Boolean) -> Unit,
     onShare: () -> Unit,
     onCopyLink: () -> Unit,
-    onClearHistory: () -> Unit,
-    onOpenInBrowser: () -> Unit,
     onSettings: () -> Unit,
     canShareCurrentPage: Boolean
 ) {
@@ -199,13 +197,6 @@ fun BrowserToolbar(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("清除历史记录") },
-                    onClick = {
-                        showMenu = false
-                        onClearHistory()
-                    }
-                )
-                DropdownMenuItem(
                     text = { Text("添加书签") },
                     onClick = {
                         showMenu = false
@@ -248,14 +239,6 @@ fun BrowserToolbar(
                     onClick = {
                         showMenu = false
                         onCopyLink()
-                    },
-                    enabled = canShareCurrentPage
-                )
-                DropdownMenuItem(
-                    text = { Text("在浏览器中打开") },
-                    onClick = {
-                        showMenu = false
-                        onOpenInBrowser()
                     },
                     enabled = canShareCurrentPage
                 )

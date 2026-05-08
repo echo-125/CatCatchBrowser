@@ -3,6 +3,7 @@ package top.he2000.catcatchbrowser.viewmodel
 import android.app.Application
 import android.webkit.CookieManager
 import android.webkit.WebStorage
+import android.webkit.WebView
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         const val HOME_URL = "about:bookmarks"
+
+        const val MAX_WINDOWS = 20
 
         const val DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -77,8 +80,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentUrl = MutableStateFlow("")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
 
+    private val _uiMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val uiMessages: SharedFlow<String> = _uiMessages.asSharedFlow()
+
+    val themeMode: StateFlow<Int> = userPrefs.themeMode
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            UserPreferencesRepository.THEME_FOLLOW_SYSTEM
+        )
+
     init {
         addNewWindow()
+    }
+
+    fun setThemeMode(mode: Int) {
+        viewModelScope.launch {
+            userPrefs.setThemeMode(mode)
+        }
     }
 
     fun cacheDefaultUserAgentIfNeeded(ua: String) {
@@ -89,7 +108,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getCachedDefaultUserAgent(): String? = cachedDefaultUserAgent
 
-    fun addNewWindow(url: String = HOME_URL) {
+    fun addNewWindow(url: String = HOME_URL): Boolean {
+        if (_windows.value.size >= MAX_WINDOWS) {
+            viewModelScope.launch {
+                _uiMessages.emit("最多开启 $MAX_WINDOWS 个标签")
+            }
+            return false
+        }
         val newWindow = BrowserWindow(
             title = "空白页",
             url = url,
@@ -99,6 +124,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _windows.value = updatedWindows
         _currentWindowIndex.value = updatedWindows.size - 1
         _currentUrl.value = url
+        return true
     }
 
     fun switchToWindow(index: Int) {
@@ -128,6 +154,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _currentWindowIndex.value = newIndex
         _currentUrl.value = _windows.value[newIndex].url
+    }
+
+    /** 关闭全部标签，保留一个新标签（与「主页 / 新建标签首页」逻辑一致） */
+    fun closeAllWindows() {
+        val startUrl = homepageUrlSetting.value.ifBlank { HOME_URL }
+        _windows.value = listOf(
+            BrowserWindow(
+                title = "空白页",
+                url = startUrl,
+                isActive = true
+            )
+        )
+        _currentWindowIndex.value = 0
+        _currentUrl.value = startUrl
     }
 
     fun updateCurrentWindowUrl(url: String) {
@@ -205,22 +245,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadUrl(url: String) {
-        val finalUrl = when {
+        updateCurrentWindowUrl(normalizeNavigationUrl(url))
+    }
+
+    /** 在新标签中打开 URL（书签、历史等） */
+    fun openUrlInNewTab(url: String): Boolean {
+        return addNewWindow(normalizeNavigationUrl(url))
+    }
+
+    /** 新建标签并打开首页（自定义首页或内置书签页） */
+    fun openNewTabHome(): Boolean {
+        val hp = homepageUrlSetting.value.ifBlank { HOME_URL }
+        return addNewWindow(hp)
+    }
+
+    private fun normalizeNavigationUrl(url: String): String {
+        return when {
             url.startsWith("http://") || url.startsWith("https://") -> url
             url.startsWith("about:") -> url
             else -> "https://$url"
         }
-        updateCurrentWindowUrl(finalUrl)
-    }
-
-    fun loadHome() {
-        val hp = homepageUrlSetting.value.ifBlank { HOME_URL }
-        updateCurrentWindowUrl(hp)
-    }
-
-    /** 菜单「书签列表」：始终进入内置书签页，不受自定义首页影响 */
-    fun openBookmarksHome() {
-        updateCurrentWindowUrl(HOME_URL)
     }
 
     fun setDesktopSite(enabled: Boolean) {
@@ -266,6 +310,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             CookieManager.getInstance().removeAllCookies(null)
             CookieManager.getInstance().flush()
             WebStorage.getInstance().deleteAllData()
+        }
+    }
+
+    /** 清除 WebView 本地缓存（模板目录与内存缓存），不影响 Cookie */
+    fun clearWebViewDiskCache() {
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                WebView(app.applicationContext).clearCache(true)
+            } catch (_: Exception) {
+                // ignore
+            }
         }
     }
 

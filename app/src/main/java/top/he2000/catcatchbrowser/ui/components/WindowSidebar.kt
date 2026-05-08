@@ -1,7 +1,5 @@
 package top.he2000.catcatchbrowser.ui.components
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -10,9 +8,10 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -32,10 +31,12 @@ fun WindowSidebar(
     onWindowSelect: (Int) -> Unit,
     onWindowClose: (Int) -> Unit,
     onNewWindow: () -> Unit,
+    onCloseAllWindows: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val swipeEnabled = windows.size > 1
+
     Box(modifier = Modifier.fillMaxSize()) {
-        // 遮罩（淡入淡出）
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -43,7 +44,6 @@ fun WindowSidebar(
                 .clickable { onDismiss() }
         )
 
-        // 侧边栏（平移）
         Column(
             modifier = Modifier
                 .offset(x = sidebarOffsetX)
@@ -51,37 +51,46 @@ fun WindowSidebar(
                 .fillMaxHeight()
                 .background(MaterialTheme.colorScheme.surface)
         ) {
-            // 标题栏
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     "窗口管理",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 8.dp)
                 )
-                IconButton(onClick = onNewWindow) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = "新建窗口",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onCloseAllWindows) {
+                        Icon(
+                            Icons.Outlined.DeleteSweep,
+                            contentDescription = "关闭全部窗口",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    IconButton(onClick = onNewWindow) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "新建窗口",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
 
             HorizontalDivider()
 
-            // 窗口列表
-            LazyColumn {
-                itemsIndexed(windows) { index, window ->
-                    WindowListItem(
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                itemsIndexed(windows, key = { _, w -> w.id }) { index, window ->
+                    WindowListItemSwipeable(
                         window = window,
                         isActive = index == currentIndex,
+                        swipeEnabled = swipeEnabled,
                         onClick = { onWindowSelect(index) },
                         onClose = { onWindowClose(index) }
                     )
@@ -91,8 +100,64 @@ fun WindowSidebar(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WindowListItem(
+private fun WindowListItemSwipeable(
+    window: BrowserWindow,
+    isActive: Boolean,
+    swipeEnabled: Boolean,
+    onClick: () -> Unit,
+    onClose: () -> Unit
+) {
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.EndToStart -> {
+                    if (swipeEnabled) {
+                        onClose()
+                        true
+                    } else {
+                        false
+                    }
+                }
+                else -> false
+            }
+        }
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = Modifier.fillMaxWidth(),
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = swipeEnabled,
+        backgroundContent = {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.errorContainer),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Icon(
+                    Icons.Default.DeleteOutline,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(end = 20.dp)
+                )
+            }
+        },
+        content = {
+            WindowListItemContent(
+                window = window,
+                isActive = isActive,
+                onClick = onClick,
+                onClose = onClose
+            )
+        }
+    )
+}
+
+@Composable
+private fun WindowListItemContent(
     window: BrowserWindow,
     isActive: Boolean,
     onClick: () -> Unit,
@@ -115,7 +180,6 @@ private fun WindowListItem(
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 选中指示器
             if (isActive) {
                 Box(
                     modifier = Modifier
@@ -129,7 +193,6 @@ private fun WindowListItem(
                 Spacer(modifier = Modifier.width(8.dp))
             }
 
-            // 内容
             Column(
                 modifier = Modifier.weight(1f)
             ) {
@@ -150,7 +213,6 @@ private fun WindowListItem(
                 )
             }
 
-            // 关闭按钮
             IconButton(
                 onClick = onClose,
                 modifier = Modifier.size(32.dp)

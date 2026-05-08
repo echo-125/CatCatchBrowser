@@ -3,6 +3,7 @@ package top.he2000.catcatchbrowser.ui.navigation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Window
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -34,6 +35,12 @@ sealed class Screen(
         route = "settings",
         title = "设置",
         icon = Icons.Default.Settings
+    )
+
+    data object History : Screen(
+        route = "history",
+        title = "历史记录",
+        icon = Icons.Default.History
     )
 
     companion object {
