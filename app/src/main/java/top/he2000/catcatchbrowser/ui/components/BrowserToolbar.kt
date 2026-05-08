@@ -62,9 +62,9 @@ fun BrowserToolbar(
         // 窗口管理按钮：空心方形内显示数字
         Surface(
             onClick = onWindowsClick,
-            shape = RoundedCornerShape(4.dp),
-            border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.onSurface),
-            modifier = Modifier.size(36.dp)
+            shape = RoundedCornerShape(3.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+            modifier = Modifier.size(28.dp)
         ) {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -72,7 +72,7 @@ fun BrowserToolbar(
             ) {
                 Text(
                     text = "$windowCount",
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center
