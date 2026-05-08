@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.sp
 fun BrowserToolbar(
     url: String,
     windowCount: Int,
+    canGoBack: Boolean = false,
+    canGoForward: Boolean = false,
     onWindowsClick: () -> Unit,
     onHomeClick: () -> Unit,
     onBackClick: () -> Unit,
@@ -132,20 +134,34 @@ fun BrowserToolbar(
         }
 
         // 返回按钮
-        IconButton(onClick = onBackClick) {
+        IconButton(
+            onClick = onBackClick,
+            enabled = canGoBack
+        ) {
             Icon(
                 Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = "返回",
-                tint = MaterialTheme.colorScheme.onSurface
+                tint = if (canGoBack) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                }
             )
         }
 
         // 前进按钮
-        IconButton(onClick = onForwardClick) {
+        IconButton(
+            onClick = onForwardClick,
+            enabled = canGoForward
+        ) {
             Icon(
                 Icons.AutoMirrored.Filled.ArrowForward,
                 contentDescription = "前进",
-                tint = MaterialTheme.colorScheme.onSurface
+                tint = if (canGoForward) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                }
             )
         }
     }

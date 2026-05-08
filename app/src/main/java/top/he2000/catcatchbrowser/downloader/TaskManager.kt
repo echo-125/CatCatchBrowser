@@ -1,7 +1,6 @@
 package top.he2000.catcatchbrowser.downloader
 
 import android.content.Context
-import androidx.room.Room
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import okhttp3.OkHttpClient
@@ -16,11 +15,7 @@ import java.util.concurrent.TimeUnit
  */
 class TaskManager(private val context: Context) {
 
-    private val database: AppDatabase = Room.databaseBuilder(
-        context,
-        AppDatabase::class.java,
-        "catcatchbrowser.db"
-    ).build()
+    private val database: AppDatabase = AppDatabase.getInstance(context)
 
     private val taskDao: DownloadTaskDao = database.downloadTaskDao()
 

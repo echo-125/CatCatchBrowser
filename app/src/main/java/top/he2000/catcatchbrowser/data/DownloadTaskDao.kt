@@ -1,6 +1,8 @@
 package top.he2000.catcatchbrowser.data
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -44,7 +46,72 @@ interface DownloadTaskDao {
     }
 }
 
-@Database(entities = [DownloadTaskEntity::class], version = 1)
+@Entity(tableName = "bookmarks")
+data class BookmarkEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val url: String,
+    val iconUrl: String = "",
+    val sortOrder: Int = 0,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Dao
+interface BookmarkDao {
+    @Query("SELECT * FROM bookmarks ORDER BY sortOrder ASC, createdAt ASC")
+    fun observeAll(): Flow<List<BookmarkEntity>>
+
+    @Query("SELECT * FROM bookmarks ORDER BY sortOrder ASC, createdAt ASC")
+    suspend fun getAll(): List<BookmarkEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(bookmark: BookmarkEntity): Long
+
+    @Update
+    suspend fun update(bookmark: BookmarkEntity)
+
+    @Delete
+    suspend fun delete(bookmark: BookmarkEntity)
+
+    @Query("DELETE FROM bookmarks WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}
+
+@Database(entities = [DownloadTaskEntity::class, BookmarkEntity::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun downloadTaskDao(): DownloadTaskDao
+    abstract fun bookmarkDao(): BookmarkDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
+
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS bookmarks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        title TEXT NOT NULL,
+                        url TEXT NOT NULL,
+                        iconUrl TEXT NOT NULL DEFAULT '',
+                        sortOrder INTEGER NOT NULL DEFAULT 0,
+                        createdAt INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
+            }
+        }
+
+        fun getInstance(context: android.content.Context): AppDatabase {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "catcatchbrowser.db"
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
+                    .also { INSTANCE = it }
+            }
+        }
+    }
 }

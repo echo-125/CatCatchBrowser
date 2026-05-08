@@ -12,8 +12,13 @@ import top.he2000.catcatchbrowser.sniffer.SnifferBridge
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
+    companion object {
+        const val HOME_URL = "about:bookmarks"
+    }
+
     private val taskManager = TaskManager(application)
     private val bridge = SnifferBridge()
+    private val bookmarkDao = AppDatabase.getInstance(application).bookmarkDao()
 
     // 窗口状态
     private val _windows = MutableStateFlow<List<BrowserWindow>>(emptyList())
@@ -40,6 +45,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // 嗅探结果
     val sniffedUrls: StateFlow<List<SniffedM3u8>> = bridge.sniffedUrls
 
+    // 书签
+    val bookmarks: StateFlow<List<BookmarkEntity>> = bookmarkDao.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // 当前URL
     private val _currentUrl = MutableStateFlow("")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
@@ -49,7 +58,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         addNewWindow()
     }
 
-    fun addNewWindow(url: String = "https://www.baidu.com") {
+    fun addNewWindow(url: String = HOME_URL) {
         val newWindow = BrowserWindow(
             title = "空白页",
             url = url,
@@ -94,7 +103,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val index = _currentWindowIndex.value
         if (index in _windows.value.indices) {
             _windows.value = _windows.value.toMutableList().apply {
-                set(index, get(index).copy(url = url))
+                set(index, get(index).copy(
+                    url = url,
+                    hasError = false,
+                    isLoading = true,
+                    loadProgress = 0
+                ))
             }
             _currentUrl.value = url
         }
@@ -109,6 +123,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updatePageProgress(progress: Int) {
+        val index = _currentWindowIndex.value
+        if (index in _windows.value.indices) {
+            _windows.value = _windows.value.toMutableList().apply {
+                set(index, get(index).copy(
+                    isLoading = progress < 100,
+                    loadProgress = progress,
+                    hasError = false
+                ))
+            }
+        }
+    }
+
+    fun updateNavigationState(canGoBack: Boolean, canGoForward: Boolean) {
+        val index = _currentWindowIndex.value
+        if (index in _windows.value.indices) {
+            _windows.value = _windows.value.toMutableList().apply {
+                set(index, get(index).copy(
+                    canGoBack = canGoBack,
+                    canGoForward = canGoForward
+                ))
+            }
+        }
+    }
+
+    fun updatePageError(description: String) {
+        val index = _currentWindowIndex.value
+        if (index in _windows.value.indices) {
+            _windows.value = _windows.value.toMutableList().apply {
+                set(index, get(index).copy(
+                    isLoading = false,
+                    hasError = true,
+                    errorMessage = description
+                ))
+            }
+        }
+    }
+
     fun loadUrl(url: String) {
         var finalUrl = url
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -118,7 +170,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadHome() {
-        loadUrl("https://www.baidu.com")
+        updateCurrentWindowUrl(HOME_URL)
+    }
+
+    // 书签操作
+    fun addBookmark(title: String, url: String) {
+        viewModelScope.launch {
+            val faviconUrl = "https://www.google.com/s2/favicons?domain=${java.net.URI(url).host}&sz=64"
+            bookmarkDao.insert(
+                BookmarkEntity(
+                    title = title,
+                    url = url,
+                    iconUrl = faviconUrl,
+                    sortOrder = bookmarks.value.size
+                )
+            )
+        }
+    }
+
+    fun updateBookmark(bookmark: BookmarkEntity) {
+        viewModelScope.launch {
+            val faviconUrl = "https://www.google.com/s2/favicons?domain=${java.net.URI(bookmark.url).host}&sz=64"
+            bookmarkDao.update(bookmark.copy(iconUrl = faviconUrl))
+        }
+    }
+
+    fun deleteBookmark(bookmark: BookmarkEntity) {
+        viewModelScope.launch {
+            bookmarkDao.delete(bookmark)
+        }
     }
 
     // 下载任务操作
