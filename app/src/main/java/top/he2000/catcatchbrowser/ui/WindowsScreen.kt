@@ -120,7 +120,8 @@ fun WindowsScreen(
             (currentUrl.startsWith("http://") || currentUrl.startsWith("https://"))
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        contentWindowInsets = WindowInsets(0.dp) // 移除系统状态栏 insets，避免顶部空白
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(modifier = Modifier.fillMaxSize()) {
