@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import top.he2000.catcatchbrowser.data.*
 import top.he2000.catcatchbrowser.downloader.TaskManager
 import top.he2000.catcatchbrowser.sniffer.SnifferBridge
+import top.he2000.catcatchbrowser.ui.components.SnifferMode
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -23,6 +24,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         const val DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+        /** 时长低于此值（秒）的嗅探结果视为广告，自动过滤 */
+        private const val MIN_DURATION_SECONDS = 90.0
     }
 
     private val taskManager = TaskManager(application)
@@ -56,7 +60,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         tasks.filter { it.status == TaskStatus.COMPLETED.name.lowercase() }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val sniffedUrls: StateFlow<List<SniffedM3u8>> = bridge.sniffedUrls
+    // 当前窗口的嗅探结果
+    val sniffedUrls: StateFlow<List<SniffedM3u8>> = _windows
+        .map { windows ->
+            val index = _currentWindowIndex.value
+            if (index in windows.indices) windows[index].sniffedUrls else emptyList()
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // 嗅探日志
+    val snifferLogs: StateFlow<List<String>> = bridge.logs
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val bookmarks: StateFlow<List<BookmarkEntity>> = bookmarkDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -80,6 +94,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentUrl = MutableStateFlow("")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
 
+    // 嗅探模式
+    private val _snifferMode = MutableStateFlow(SnifferMode.GENERAL)
+    val snifferMode: StateFlow<SnifferMode> = _snifferMode.asStateFlow()
+
     private val _uiMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val uiMessages: SharedFlow<String> = _uiMessages.asSharedFlow()
 
@@ -92,11 +110,91 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         addNewWindow()
+        // 设置嗅探回调，将结果添加到对应窗口
+        bridge.setOnM3u8Detected { sniffed, windowId ->
+            addSniffedToWindow(sniffed, windowId)
+        }
+    }
+
+    /**
+     * 将嗅探结果添加到指定窗口
+     */
+    private fun addSniffedToWindow(sniffed: SniffedM3u8, windowId: String?) {
+        // 过滤时长过短的资源（广告），duration=0 表示未知时长，保留
+        if (sniffed.duration > 0 && sniffed.duration < MIN_DURATION_SECONDS) {
+            return
+        }
+
+        val windows = _windows.value
+        val targetIndex = if (windowId != null) {
+            windows.indexOfFirst { it.id == windowId }
+        } else {
+            _currentWindowIndex.value
+        }
+
+        if (targetIndex in windows.indices) {
+            val window = windows[targetIndex]
+            // 避免重复
+            val existingIndex = window.sniffedUrls.indexOfFirst { it.url == sniffed.url }
+            if (existingIndex >= 0) {
+                // 已存在：仅在新数据更丰富时更新（有 duration 而旧数据没有）
+                val existing = window.sniffedUrls[existingIndex]
+                val better = (sniffed.duration > 0 && existing.duration == 0.0) ||
+                    (sniffed.title != null && sniffed.title.isNotEmpty() && existing.title.isNullOrEmpty())
+                if (better) {
+                    val updatedSniffedUrls = window.sniffedUrls.toMutableList()
+                    updatedSniffedUrls[existingIndex] = existing.copy(
+                        duration = if (sniffed.duration > 0) sniffed.duration else existing.duration,
+                        title = sniffed.title ?: existing.title,
+                        requestHeaders = if (sniffed.requestHeaders.isNotEmpty()) sniffed.requestHeaders else existing.requestHeaders
+                    )
+                    _windows.value = windows.toMutableList().apply {
+                        set(targetIndex, window.copy(sniffedUrls = updatedSniffedUrls))
+                    }
+                }
+            } else {
+                // 新条目：检查时长过滤
+                val updatedSniffedUrls = mutableListOf<SniffedM3u8>().apply {
+                    add(sniffed)
+                    addAll(window.sniffedUrls.take(49)) // 最多保留 50 条
+                }
+                _windows.value = windows.toMutableList().apply {
+                    set(targetIndex, window.copy(sniffedUrls = updatedSniffedUrls))
+                }
+            }
+        }
+    }
+
+    /**
+     * 检测页面 URL/标题是否匹配已知站点，自动切换嗅探模式
+     */
+    fun autoDetectSnifferMode(url: String, title: String?) {
+        val lower = url.lowercase()
+        val titleLower = title?.lowercase() ?: ""
+        if (lower.contains("rou") || titleLower.contains("rou")) {
+            if (_snifferMode.value != SnifferMode.ROU) {
+                _snifferMode.value = SnifferMode.ROU
+            }
+        }
     }
 
     fun setThemeMode(mode: Int) {
         viewModelScope.launch {
             userPrefs.setThemeMode(mode)
+        }
+    }
+
+    fun setSnifferMode(mode: SnifferMode) {
+        _snifferMode.value = mode
+    }
+
+    fun clearCurrentSniffedUrls() {
+        val index = _currentWindowIndex.value
+        if (index in _windows.value.indices) {
+            _windows.value = _windows.value.toMutableList().apply {
+                set(index, get(index).copy(sniffedUrls = emptyList()))
+            }
+            bridge.clear()
         }
     }
 
@@ -134,6 +232,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _currentWindowIndex.value = index
             _currentUrl.value = _windows.value[index].url
+            // 更新 Bridge 的当前窗口 ID
+            bridge.setCurrentWindowId(_windows.value[index].id)
         }
     }
 

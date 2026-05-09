@@ -12,5 +12,6 @@ data class BrowserWindow(
     val canGoBack: Boolean = false,
     val canGoForward: Boolean = false,
     val hasError: Boolean = false,
-    val errorMessage: String = ""
+    val errorMessage: String = "",
+    val sniffedUrls: List<SniffedM3u8> = emptyList()
 )

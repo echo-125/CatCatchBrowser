@@ -1,13 +1,11 @@
-// M3U8 嗅探脚本
-// 参考: cat-catch-assistant/m3u8_sniffer_userscript.js
-// 特点: 完整的网络请求拦截 + 深度扫描 + 请求头保留
+// M3U8 嗅探脚本 - 通用模式
+// 基础网络请求拦截
 
 (function() {
     'use strict';
 
     const SNIFFER_BRIDGE = 'SnifferBridge';
 
-    // 状态管理
     const state = {
         capturedUrls: new Set(),
         pendingUrls: new Set(),
@@ -15,17 +13,20 @@
         requestHeaders: new Map()
     };
 
-    // 检查 Bridge 是否存在
     function hasBridge() {
         return typeof window[SNIFFER_BRIDGE] !== 'undefined';
     }
 
-    // 日志
     function log(msg) {
-        console.log('[M3U8Sniffer] ' + msg);
+        console.log('[M3U8Sniffer-General] ' + msg);
+        // 同时发送到 Android 端
+        if (hasBridge()) {
+            try {
+                window[SNIFFER_BRIDGE].log(msg);
+            } catch (e) {}
+        }
     }
 
-    // 报告捕获的 M3U8 URL
     function reportM3u8(url, duration, headers) {
         if (!hasBridge() || state.capturedUrls.has(url)) return;
         state.capturedUrls.add(url);
@@ -40,7 +41,6 @@
         }
     }
 
-    // 报告播放列表变体
     function reportVariants(url, variants, headers) {
         if (!hasBridge()) return;
 
@@ -54,14 +54,12 @@
         }
     }
 
-    // 检查是否是 M3U8 URL
     function isM3u8Url(url) {
         if (!url) return false;
         const urlStr = url.toString().toLowerCase();
         return urlStr.includes('.m3u8');
     }
 
-    // 检查是否是广告 URL
     function isAdUrl(url) {
         if (!url) return false;
         const lower = url.toString().toLowerCase();
@@ -69,7 +67,6 @@
         return adKeywords.some(kw => lower.includes(kw));
     }
 
-    // 解析 M3U8 时长
     function parseM3u8Duration(content) {
         if (!content || typeof content !== 'string') return 0;
         let totalDuration = 0;
@@ -82,7 +79,6 @@
         return totalDuration;
     }
 
-    // 解析 M3U8 播放列表变体
     function parseM3u8Variants(content, baseUrl) {
         if (!content || typeof content !== 'string') return null;
         if (!content.includes('#EXT-X-STREAM-INF')) return null;
@@ -133,7 +129,6 @@
         return variants.length > 0 ? variants : null;
     }
 
-    // 获取请求头
     function extractFetchHeaders(headers) {
         if (!headers) return {};
 
@@ -149,11 +144,9 @@
         return {};
     }
 
-    // 构建请求头（添加必要的头）
     function buildRequestHeaders(url, headers) {
         const result = { ...headers };
 
-        // 添加 Referer 和 Origin
         if (!result['Referer']) {
             result['Referer'] = window.location.href;
         }
@@ -165,26 +158,31 @@
         return result;
     }
 
-    // 处理 M3U8 URL
     async function handleM3u8Url(url, responseText, requestHeaders) {
-        if (!isM3u8Url(url)) return;
+        if (!isM3u8Url(url)) {
+            log('跳过非m3u8: ' + url?.toString?.()?.substring?.(0, 50));
+            return;
+        }
 
         const urlStr = url.toString();
+        log('检查m3u8: ' + urlStr.substring(0, 80));
 
         if (state.capturedUrls.has(urlStr) || state.pendingUrls.has(urlStr)) {
+            log('跳过重复: ' + urlStr.substring(0, 50));
             return;
         }
 
         if (isAdUrl(urlStr)) {
-            log('Skipping ad URL: ' + urlStr.substring(0, 50));
+            log('跳过广告URL: ' + urlStr.substring(0, 50));
             return;
         }
 
         state.pendingUrls.add(urlStr);
         const headers = buildRequestHeaders(urlStr, requestHeaders || {});
 
+        log('开始处理: ' + urlStr.substring(0, 60));
+
         try {
-            // 获取 M3U8 内容
             let m3u8Content = responseText;
 
             if (!m3u8Content && !urlStr.startsWith('blob:')) {
@@ -204,20 +202,17 @@
                 }
             }
 
-            // 检查是否是 master playlist
             const variants = parseM3u8Variants(m3u8Content, urlStr);
 
             if (variants && variants.length > 0) {
                 state.capturedUrls.add(urlStr);
                 reportVariants(urlStr, variants, headers);
             } else {
-                // 计算时长
                 const duration = parseM3u8Duration(m3u8Content);
                 state.capturedUrls.add(urlStr);
                 reportM3u8(urlStr, duration, headers);
             }
         } catch (e) {
-            // 即使失败也报告 URL
             state.capturedUrls.add(urlStr);
             reportM3u8(urlStr, 0, headers);
         } finally {
@@ -225,9 +220,7 @@
         }
     }
 
-    // ==================== 网络请求拦截 ====================
-
-    // 1. 拦截 XHR setRequestHeader
+    // 拦截 XHR setRequestHeader
     const originalXHRSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
     XMLHttpRequest.prototype.setRequestHeader = function(key, value) {
         if (!this._snifferHeaders) this._snifferHeaders = {};
@@ -235,7 +228,7 @@
         return originalXHRSetRequestHeader.apply(this, arguments);
     };
 
-    // 2. 拦截 XHR open
+    // 拦截 XHR open
     const originalXHROpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
         this._snifferUrl = url;
@@ -250,7 +243,7 @@
         return originalXHROpen.apply(this, arguments);
     };
 
-    // 3. 拦截 fetch
+    // 拦截 fetch
     const originalFetch = window.fetch;
     window.fetch = function(url, options) {
         const requestHeaders = extractFetchHeaders(options?.headers);
@@ -259,7 +252,6 @@
             const urlStr = url?.toString?.() || '';
 
             if (urlStr.includes('.m3u8')) {
-                // 克隆 response 以读取内容
                 response.clone().text()
                     .then(text => handleM3u8Url(url, text, requestHeaders))
                     .catch(() => handleM3u8Url(url, null, requestHeaders));
@@ -269,7 +261,7 @@
         });
     };
 
-    // 4. 拦截动态创建的 script 标签
+    // 拦截动态创建的 script 标签
     const originalCreateElement = document.createElement;
     document.createElement = function(tagName) {
         const element = originalCreateElement.call(document, tagName);
@@ -287,7 +279,7 @@
         return element;
     };
 
-    // ==================== 深度扫描 ====================
+    // 深度扫描
     function deepScan() {
         log('Starting deep scan...');
 
@@ -298,7 +290,6 @@
 
         const foundUrls = new Set();
 
-        // 1. 扫描 HTML
         const html = document.documentElement.outerHTML;
         patterns.forEach(pattern => {
             const matches = html.match(pattern);
@@ -312,7 +303,6 @@
             }
         });
 
-        // 2. 扫描所有 script 标签
         document.querySelectorAll('script').forEach(script => {
             const content = script.textContent || script.innerHTML || '';
             patterns.forEach(pattern => {
@@ -330,13 +320,11 @@
             });
         });
 
-        // 3. 扫描 video 元素
         document.querySelectorAll('video').forEach(video => {
             const src = video.src || video.currentSrc;
             if (src) {
                 foundUrls.add(src);
             }
-            // 扫描 source 子元素
             video.querySelectorAll('source').forEach(source => {
                 if (source.src) {
                     foundUrls.add(source.src);
@@ -344,22 +332,24 @@
             });
         });
 
-        // 处理找到的 URL
         log('Deep scan found ' + foundUrls.size + ' potential URLs');
         foundUrls.forEach(url => {
             handleM3u8Url(url, null, {});
         });
     }
 
-    // ==================== 初始化 ====================
     function init() {
-        log('Script loaded');
+        log('Script loaded (General Mode)');
+        // 通知 Android 端脚本已加载
+        if (hasBridge()) {
+            try {
+                window[SNIFFER_BRIDGE].onScriptLoaded('General');
+            } catch (e) {}
+        }
 
-        // 延迟深度扫描
         setTimeout(deepScan, 1500);
         setTimeout(deepScan, 4000);
 
-        // 监听 DOM 变化，扫描新添加的 video 元素
         const observer = new MutationObserver((mutations) => {
             mutations.forEach(mutation => {
                 mutation.addedNodes.forEach(node => {
