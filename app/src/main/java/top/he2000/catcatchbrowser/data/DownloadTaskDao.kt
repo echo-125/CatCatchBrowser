@@ -37,12 +37,18 @@ interface DownloadTaskDao {
     @Query("UPDATE download_tasks SET status = :status, updatedAt = :timestamp WHERE id = :id")
     suspend fun updateStatus(id: Long, status: String, timestamp: Long = System.currentTimeMillis())
 
-    @Query("UPDATE download_tasks SET progress = :progress, downloadedSegments = :downloaded, totalSegments = :total, currentSpeed = :speed, updatedAt = :timestamp WHERE id = :id")
-    suspend fun updateProgress(id: Long, progress: Float, downloaded: Int, total: Int, speed: String, timestamp: Long = System.currentTimeMillis())
+    @Query("UPDATE download_tasks SET progress = :progress, downloadedSegments = :downloaded, totalSegments = :total, totalBytesDownloaded = :totalBytes, currentSpeed = :speed, updatedAt = :timestamp WHERE id = :id")
+    suspend fun updateProgress(id: Long, progress: Float, downloaded: Int, total: Int, totalBytes: Long, speed: String, timestamp: Long = System.currentTimeMillis())
+
+    @Query("UPDATE download_tasks SET retryCount = :count, updatedAt = :timestamp WHERE id = :id")
+    suspend fun updateRetryCount(id: Long, count: Int, timestamp: Long = System.currentTimeMillis())
+
+    @Query("UPDATE download_tasks SET fileName = :fileName, updatedAt = :timestamp WHERE id = :id")
+    suspend fun updateFileName(id: Long, fileName: String, timestamp: Long = System.currentTimeMillis())
 
     @Transaction
-    suspend fun updateTaskProgress(id: Long, progress: Float, downloaded: Int, total: Int, speed: String) {
-        updateProgress(id, progress, downloaded, total, speed)
+    suspend fun updateTaskProgress(id: Long, progress: Float, downloaded: Int, total: Int, totalBytes: Long, speed: String) {
+        updateProgress(id, progress, downloaded, total, totalBytes, speed)
     }
 }
 
@@ -130,7 +136,7 @@ interface HistoryDao {
 
 @Database(
     entities = [DownloadTaskEntity::class, BookmarkEntity::class, HistoryEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -173,6 +179,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE download_tasks ADD COLUMN totalBytesDownloaded INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE download_tasks ADD COLUMN retryCount INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getInstance(context: android.content.Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -180,7 +193,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "catcatchbrowser.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }

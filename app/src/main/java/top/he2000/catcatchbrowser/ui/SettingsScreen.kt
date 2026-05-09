@@ -1,9 +1,12 @@
 package top.he2000.catcatchbrowser.ui
 
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import android.webkit.WebSettings
 import android.webkit.WebView
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -37,9 +40,14 @@ fun SettingsScreen(
     val homepageSetting by viewModel.homepageUrlSetting.collectAsState()
     val searchTemplate by viewModel.searchTemplate.collectAsState()
     val themeMode by viewModel.themeMode.collectAsState()
+    val downloadPath by viewModel.downloadPath.collectAsState()
+    val concurrentDownloads by viewModel.concurrentDownloads.collectAsState()
+    val autoRetry by viewModel.autoRetryEnabled.collectAsState()
+    val maxRetries by viewModel.maxRetriesSetting.collectAsState()
 
     var homepageDraft by remember(homepageSetting) { mutableStateOf(homepageSetting) }
     var searchDraft by remember(searchTemplate) { mutableStateOf(searchTemplate) }
+    var downloadPathDraft by remember(downloadPath) { mutableStateOf(downloadPath) }
 
     LaunchedEffect(homepageSetting) {
         homepageDraft = homepageSetting
@@ -47,9 +55,34 @@ fun SettingsScreen(
     LaunchedEffect(searchTemplate) {
         searchDraft = searchTemplate
     }
+    LaunchedEffect(downloadPath) {
+        downloadPathDraft = downloadPath
+    }
 
     var showClearCacheConfirm by remember { mutableStateOf(false) }
     var showClearCookiesConfirm by remember { mutableStateOf(false) }
+
+    // SD 卡权限状态
+    val sdHelper = remember { top.he2000.catcatchbrowser.util.SdCardHelper }
+    var needsSdPermission by remember { mutableStateOf(false) }
+    LaunchedEffect(downloadPathDraft) {
+        needsSdPermission = downloadPathDraft.isNotBlank() &&
+            sdHelper.isSdCardPath(downloadPathDraft) &&
+            !sdHelper.hasManageStoragePermission()
+    }
+    val manageStorageLauncher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        // 从系统设置返回后重新检查权限
+        needsSdPermission = downloadPathDraft.isNotBlank() &&
+            sdHelper.isSdCardPath(downloadPathDraft) &&
+            !sdHelper.hasManageStoragePermission()
+        if (!needsSdPermission && downloadPathDraft.isNotBlank()) {
+            scope.launch {
+                snackbarHostState.showSnackbar("权限已授予，请重新保存路径")
+            }
+        }
+    }
 
     val versionName = remember {
         try {
@@ -225,6 +258,151 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("保存搜索模板")
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("下载", style = MaterialTheme.typography.titleMedium)
+
+            // 方式一：目录选择器
+            val dirPickerLauncher = rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+            ) { uri ->
+                uri?.let {
+                    val resolvedPath = top.he2000.catcatchbrowser.util.SdCardHelper.resolvePathFromUri(context, it)
+                    if (resolvedPath != null) {
+                        downloadPathDraft = resolvedPath
+                        viewModel.setDownloadPath(resolvedPath)
+                    } else {
+                        scope.launch {
+                            snackbarHostState.showSnackbar("无法解析所选目录路径，请手动输入")
+                        }
+                    }
+                }
+            }
+
+            OutlinedButton(
+                onClick = { dirPickerLauncher.launch(null) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("选择下载目录")
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "或手动输入路径：",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // 方式二：手动输入路径
+            OutlinedTextField(
+                value = downloadPathDraft,
+                onValueChange = { downloadPathDraft = it },
+                label = { Text("下载路径") },
+                placeholder = { Text("留空使用默认路径") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            // SD 卡路径提示
+            if (needsSdPermission) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            "SD 卡路径需要额外权限",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Android 11+ 写入 SD 卡需要授予\"所有文件访问\"权限",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                val intent = sdHelper.createManageStorageIntent()
+                                if (intent != null) {
+                                    manageStorageLauncher.launch(intent)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("前往授予所有文件访问权限")
+                        }
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        viewModel.setDownloadPath(downloadPathDraft.trim())
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("保存路径")
+                }
+                OutlinedButton(
+                    onClick = {
+                        downloadPathDraft = ""
+                        viewModel.setDownloadPath("")
+                        scope.launch {
+                            snackbarHostState.showSnackbar("已恢复默认路径")
+                        }
+                    }
+                ) {
+                    Text("重置")
+                }
+            }
+
+            Text("同时下载任务数: $concurrentDownloads", style = MaterialTheme.typography.labelLarge)
+            Slider(
+                value = concurrentDownloads.toFloat(),
+                onValueChange = { viewModel.setConcurrentDownloads(it.toInt()) },
+                valueRange = 1f..10f,
+                steps = 8,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("下载失败自动重试")
+                    Text(
+                        "分片下载失败时自动重试",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = autoRetry,
+                    onCheckedChange = { viewModel.setAutoRetry(it) }
+                )
+            }
+
+            if (autoRetry) {
+                Text("最大重试次数: $maxRetries", style = MaterialTheme.typography.labelLarge)
+                Slider(
+                    value = maxRetries.toFloat(),
+                    onValueChange = { viewModel.setMaxRetries(it.toInt()) },
+                    valueRange = 1f..5f,
+                    steps = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

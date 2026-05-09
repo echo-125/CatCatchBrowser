@@ -32,8 +32,13 @@ class TaskManager(private val context: Context) {
     // 最大并发下载数
     var maxConcurrentDownloads: Int = 3
 
-    // 当前活动下载数
-    private val activeDownloads = MutableStateFlow(0)
+    // 自动重试
+    var autoRetryEnabled: Boolean = true
+    var maxRetryCount: Int = 3
+
+    // 当前活动下载数（线程安全）
+    private val _activeDownloads = MutableStateFlow(0)
+    val activeDownloads: StateFlow<Int> = _activeDownloads.asStateFlow()
 
     /**
      * 观察所有任务
@@ -76,8 +81,13 @@ class TaskManager(private val context: Context) {
             return // 已经在运行
         }
 
+        _activeDownloads.value++
+
         downloadJobs[taskId] = downloadScope.launch {
-            val task = taskDao.getById(taskId) ?: return@launch
+            val task = taskDao.getById(taskId) ?: run {
+                _activeDownloads.value--
+                return@launch
+            }
 
             // 更新状态为下载中
             taskDao.updateStatus(taskId, TaskStatus.DOWNLOADING.name.lowercase())
@@ -92,26 +102,39 @@ class TaskManager(private val context: Context) {
                 emptyMap()
             }
 
-            // 输出文件
-            val outputFile = File(task.savePath, "${task.fileName}.ts")
+            // 输出文件（先下载为 .ts，完成后转为 .mp4）
+            val tempTsFile = File(task.savePath, "${task.fileName}.ts")
+            val outputFile = File(task.savePath, "${task.fileName}.mp4")
+
+            // 进度更新节流：最少间隔 500ms
+            var lastProgressUpdate = 0L
 
             val result = downloader.download(
                 m3u8Url = task.url,
-                outputFile = outputFile,
+                outputFile = tempTsFile,
                 requestHeaders = headers,
                 concurrency = 16,
-                scope = downloadScope
+                scope = downloadScope,
+                initialDownloadedSegments = task.downloadedSegments,
+                initialBytes = task.totalBytesDownloaded
             ) { downloaded, total, speed ->
-                // 更新进度
+                val now = System.currentTimeMillis()
+                if (now - lastProgressUpdate < 500) return@download
+                lastProgressUpdate = now
+
                 val progress = if (total > 0) (downloaded.toFloat() / total) * 100 else 0f
+                val bytes = downloader.getTotalBytesDownloaded()
                 downloadScope.launch {
-                    taskDao.updateProgress(taskId, progress, downloaded, total, speed)
+                    taskDao.updateProgress(taskId, progress, downloaded, total, bytes, speed)
                 }
             }
 
             // 处理结果
             when (result) {
                 is SegmentDownloader.Result.Success -> {
+                    // TS → MP4 转换
+                    taskDao.updateStatus(taskId, TaskStatus.CONVERTING.name.lowercase())
+                    val finalFile = convertToMp4(tempTsFile, outputFile)
                     taskDao.update(
                         task.copy(
                             status = TaskStatus.COMPLETED.name.lowercase(),
@@ -121,13 +144,22 @@ class TaskManager(private val context: Context) {
                     )
                 }
                 is SegmentDownloader.Result.Error -> {
-                    taskDao.update(
-                        task.copy(
-                            status = TaskStatus.FAILED.name.lowercase(),
-                            errorMessage = result.message,
-                            updatedAt = System.currentTimeMillis()
+                    val currentRetry = task.retryCount
+                    if (autoRetryEnabled && currentRetry < maxRetryCount) {
+                        taskDao.updateRetryCount(taskId, currentRetry + 1)
+                        downloadScope.launch {
+                            delay(calculateBackoff(currentRetry))
+                            startTask(taskId)
+                        }
+                    } else {
+                        taskDao.update(
+                            task.copy(
+                                status = TaskStatus.FAILED.name.lowercase(),
+                                errorMessage = result.message,
+                                updatedAt = System.currentTimeMillis()
+                            )
                         )
-                    )
+                    }
                 }
                 is SegmentDownloader.Result.Cancelled -> {
                     taskDao.update(
@@ -141,7 +173,7 @@ class TaskManager(private val context: Context) {
 
             downloaders.remove(taskId)
             downloadJobs.remove(taskId)
-            activeDownloads.value--
+            _activeDownloads.value = (_activeDownloads.value - 1).coerceAtLeast(0)
         }
     }
 
@@ -153,6 +185,7 @@ class TaskManager(private val context: Context) {
         downloadJobs[taskId]?.cancel()
         downloaders.remove(taskId)
         downloadJobs.remove(taskId)
+        _activeDownloads.value = (_activeDownloads.value - 1).coerceAtLeast(0)
 
         downloadScope.launch {
             taskDao.updateStatus(taskId, TaskStatus.PAUSED.name.lowercase())
@@ -178,7 +211,19 @@ class TaskManager(private val context: Context) {
     }
 
     /**
-     * 重试失败的任务
+     * 恢复暂停的任务（不重置进度）
+     */
+    fun resumeTask(taskId: Long) {
+        val job = downloadJobs[taskId]
+        if (job != null && job.isActive) return
+
+        downloadScope.launch {
+            startTask(taskId)
+        }
+    }
+
+    /**
+     * 重试失败的任务（重置进度）
      */
     suspend fun retryTask(taskId: Long) {
         val task = taskDao.getById(taskId) ?: return
@@ -190,11 +235,44 @@ class TaskManager(private val context: Context) {
                     status = TaskStatus.PENDING.name.lowercase(),
                     progress = 0f,
                     downloadedSegments = 0,
+                    totalBytesDownloaded = 0,
+                    retryCount = 0,
                     errorMessage = "",
                     updatedAt = System.currentTimeMillis()
                 )
             )
             startTask(taskId)
+        }
+    }
+
+    /**
+     * 更新任务文件名（用于标题回填）
+     */
+    suspend fun updateFileName(taskId: Long, fileName: String) {
+        taskDao.updateFileName(taskId, fileName)
+    }
+
+    private fun calculateBackoff(retryCount: Int): Long {
+        return (2000L * (1L shl retryCount)).coerceAtMost(30_000L)
+    }
+
+    /**
+     * 将下载的 TS 文件转换为 MP4
+     * 转换成功删除 TS 文件，失败则重命名为 .mp4（多数播放器仍可播放）
+     */
+    private fun convertToMp4(tsFile: File, mp4File: File): File {
+        val converter = top.he2000.catcatchbrowser.util.TsToMp4Converter
+        when (val result = converter.convert(tsFile, mp4File)) {
+            is top.he2000.catcatchbrowser.util.TsToMp4Converter.Result.Success -> {
+                tsFile.delete()
+                return mp4File
+            }
+            is top.he2000.catcatchbrowser.util.TsToMp4Converter.Result.Error -> {
+                // MediaExtractor 不支持该 TS 格式，直接重命名为 .mp4
+                if (mp4File.exists()) mp4File.delete()
+                val renamed = tsFile.renameTo(mp4File)
+                return if (renamed) mp4File else tsFile
+            }
         }
     }
 
@@ -211,9 +289,8 @@ class TaskManager(private val context: Context) {
     suspend fun startAllPending() {
         val pendingTasks = taskDao.getByStatus(TaskStatus.PENDING.name.lowercase())
         for (task in pendingTasks) {
-            if (activeDownloads.value < maxConcurrentDownloads) {
+            if (_activeDownloads.value < maxConcurrentDownloads) {
                 startTask(task.id)
-                activeDownloads.value++
             } else {
                 break
             }
@@ -228,6 +305,7 @@ class TaskManager(private val context: Context) {
         downloadJobs.values.forEach { it.cancel() }
         downloaders.clear()
         downloadJobs.clear()
+        _activeDownloads.value = 0
 
         downloadScope.launch {
             val downloadingTasks = taskDao.getByStatus(TaskStatus.DOWNLOADING.name.lowercase())

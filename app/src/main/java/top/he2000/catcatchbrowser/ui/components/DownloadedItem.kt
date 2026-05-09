@@ -83,7 +83,9 @@ fun DownloadedItem(
             Column {
                 IconButton(
                     onClick = {
-                        val file = File(task.savePath, "${task.fileName}.ts")
+                        val mp4File = File(task.savePath, "${task.fileName}.mp4")
+                        val tsFile = File(task.savePath, "${task.fileName}.ts")
+                        val file = if (mp4File.exists()) mp4File else tsFile
                         if (file.exists()) {
                             val uri = FileProvider.getUriForFile(
                                 context,

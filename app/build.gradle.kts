@@ -10,6 +10,23 @@ android {
     namespace = "top.he2000.catcatchbrowser"
     compileSdk = 35
 
+    signingConfigs {
+        create("release") {
+            val propsFile = rootProject.file("local.properties")
+            val props = if (propsFile.exists()) {
+                propsFile.readLines().associate { line ->
+                    val idx = line.indexOf('=')
+                    if (idx > 0) line.substring(0, idx).trim() to line.substring(idx + 1).trim()
+                    else "" to ""
+                }
+            } else emptyMap()
+            storeFile = file(props["RELEASE_STORE_FILE"] ?: "../release.keystore")
+            storePassword = props["RELEASE_STORE_PASSWORD"] ?: ""
+            keyAlias = props["RELEASE_KEY_ALIAS"] ?: "catcatch"
+            keyPassword = props["RELEASE_KEY_PASSWORD"] ?: ""
+        }
+    }
+
     defaultConfig {
         applicationId = "top.he2000.catcatchbrowser"
         minSdk = 26
@@ -24,6 +41,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

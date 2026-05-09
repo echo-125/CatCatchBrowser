@@ -27,6 +27,10 @@ class SnifferBridge {
     // 当前窗口 ID
     private var currentWindowId: String? = null
 
+    // 当前页面标题（由 WebViewClient 更新）
+    @Volatile
+    var currentPageTitle: String = ""
+
     /**
      * 设置当前窗口 ID
      */
@@ -83,15 +87,17 @@ class SnifferBridge {
      * JS 调用：报告播放列表变体
      */
     @JavascriptInterface
-    fun reportPlaylistVariants(url: String, variantsJson: String, headersJson: String?) {
+    fun reportPlaylistVariants(url: String, variantsJson: String, headersJson: String?, duration: Double = 0.0, title: String? = null) {
         // 解析变体信息
         val variants = parseVariantsJson(variantsJson)
         val headers = parseHeadersJson(headersJson)
 
         val sniffed = SniffedM3u8(
             url = url,
+            title = title,
             requestHeaders = headers,
-            variants = variants
+            variants = variants,
+            duration = duration
         )
 
         // 更新列表
@@ -130,7 +136,7 @@ class SnifferBridge {
     /**
      * 原生层调用：从 shouldInterceptRequest 捕获 m3u8 URL
      */
-    fun reportM3u8FromNative(url: String, headers: Map<String, String>, duration: Double = 0.0) {
+    fun reportM3u8FromNative(url: String, headers: Map<String, String>, duration: Double = 0.0, title: String? = null) {
         android.util.Log.d("SnifferBridge", "Native captured: $url (duration=${duration}s)")
         log("[原生捕获] $url (${duration}s)")
 
@@ -139,8 +145,12 @@ class SnifferBridge {
         if (existingIndex >= 0) {
             val existing = currentList[existingIndex]
             // 只在新数据更丰富时替换（保留已有的更好数据）
-            if (duration > 0 && existing.duration == 0.0) {
-                val updated = existing.copy(duration = duration)
+            val hasBetterTitle = title != null && title.isNotEmpty() && existing.title.isNullOrEmpty()
+            if ((duration > 0 && existing.duration == 0.0) || hasBetterTitle) {
+                val updated = existing.copy(
+                    duration = if (duration > 0) duration else existing.duration,
+                    title = title ?: existing.title
+                )
                 currentList[existingIndex] = updated
                 _sniffedUrls.value = currentList
                 onM3u8Detected?.invoke(updated, currentWindowId)
@@ -148,7 +158,7 @@ class SnifferBridge {
             // duration=0 的新数据不覆盖已有条目
         } else {
             val sniffed = SniffedM3u8(
-                url = url, title = null, duration = duration, requestHeaders = headers
+                url = url, title = title, duration = duration, requestHeaders = headers
             )
             currentList.add(0, sniffed)
             _sniffedUrls.value = currentList.take(50)

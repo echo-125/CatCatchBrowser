@@ -1,5 +1,6 @@
 package top.he2000.catcatchbrowser.ui.components
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -16,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.he2000.catcatchbrowser.data.DownloadTaskEntity
 import top.he2000.catcatchbrowser.data.TaskStatus
+import top.he2000.catcatchbrowser.downloader.SegmentDownloader
 
 @Composable
 fun DownloadTaskItem(
@@ -29,6 +31,7 @@ fun DownloadTaskItem(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
+            .animateContentSize()
     ) {
         Column(
             modifier = Modifier
@@ -47,58 +50,92 @@ fun DownloadTaskItem(
             Spacer(modifier = Modifier.height(8.dp))
 
             // 进度条
-            LinearProgressIndicator(
-                progress = { task.progress / 100f },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp),
-                color = when (task.status) {
-                    TaskStatus.DOWNLOADING.name.lowercase() -> MaterialTheme.colorScheme.primary
-                    TaskStatus.PAUSED.name.lowercase() -> MaterialTheme.colorScheme.error
-                    TaskStatus.FAILED.name.lowercase() -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.primary
-                }
-            )
+            val isPending = task.status == TaskStatus.PENDING.name.lowercase()
+            val progressColor = when (task.status) {
+                TaskStatus.DOWNLOADING.name.lowercase() -> MaterialTheme.colorScheme.primary
+                TaskStatus.CONVERTING.name.lowercase() -> MaterialTheme.colorScheme.tertiary
+                TaskStatus.PAUSED.name.lowercase() -> MaterialTheme.colorScheme.outline
+                TaskStatus.FAILED.name.lowercase() -> MaterialTheme.colorScheme.error
+                else -> MaterialTheme.colorScheme.primary
+            }
+            if (isPending) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                LinearProgressIndicator(
+                    progress = { task.progress / 100f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp),
+                    color = progressColor
+                )
+            }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // 状态信息
+            // 状态信息行
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 分片进度
-                Text(
-                    text = "${task.downloadedSegments}/${task.totalSegments}",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                // 速度
-                if (task.currentSpeed.isNotEmpty()) {
+                // 左侧：分片进度 + 已下载大小
+                Column {
                     Text(
-                        text = task.currentSpeed,
+                        text = "${task.downloadedSegments}/${task.totalSegments} 分片",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (task.totalBytesDownloaded > 0) {
+                        Text(
+                            text = SegmentDownloader.formatSize(task.totalBytesDownloaded),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
-                // 状态
-                Text(
-                    text = when (task.status) {
-                        TaskStatus.DOWNLOADING.name.lowercase() -> "下载中"
-                        TaskStatus.PAUSED.name.lowercase() -> "已暂停"
-                        TaskStatus.PENDING.name.lowercase() -> "等待中"
-                        TaskStatus.FAILED.name.lowercase() -> "失败"
-                        TaskStatus.CANCELLED.name.lowercase() -> "已取消"
-                        else -> task.status
-                    },
-                    fontSize = 12.sp,
-                    color = when (task.status) {
-                        TaskStatus.FAILED.name.lowercase() -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                // 中间：速度 + ETA
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (task.currentSpeed.isNotEmpty() && task.status == TaskStatus.DOWNLOADING.name.lowercase()) {
+                        Text(
+                            text = task.currentSpeed,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
+                }
+
+                // 右侧：状态文本
+                val statusText = when (task.status) {
+                    TaskStatus.DOWNLOADING.name.lowercase() -> {
+                        if (task.progress > 0) "%.0f%%".format(task.progress) else "下载中"
+                    }
+                    TaskStatus.CONVERTING.name.lowercase() -> "转换中"
+                    TaskStatus.PAUSED.name.lowercase() -> "已暂停"
+                    TaskStatus.PENDING.name.lowercase() -> "准备中..."
+                    TaskStatus.FAILED.name.lowercase() -> "失败"
+                    TaskStatus.CANCELLED.name.lowercase() -> "已取消"
+                    TaskStatus.COMPLETED.name.lowercase() -> "完成"
+                    else -> task.status
+                }
+                val statusColor = when (task.status) {
+                    TaskStatus.FAILED.name.lowercase() -> MaterialTheme.colorScheme.error
+                    TaskStatus.COMPLETED.name.lowercase() -> MaterialTheme.colorScheme.primary
+                    TaskStatus.CONVERTING.name.lowercase() -> MaterialTheme.colorScheme.tertiary
+                    TaskStatus.PENDING.name.lowercase() -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                Text(
+                    text = statusText,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = statusColor
                 )
             }
 
@@ -111,6 +148,16 @@ fun DownloadTaskItem(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            // 重试次数
+            if (task.retryCount > 0) {
+                Text(
+                    text = "已重试 ${task.retryCount} 次",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
             }
 
@@ -149,14 +196,25 @@ fun DownloadTaskItem(
                             )
                         }
                     }
+                    TaskStatus.CONVERTING.name.lowercase() -> {
+                        // 转换中不显示操作按钮
+                    }
+                    TaskStatus.COMPLETED.name.lowercase() -> {
+                        // 已完成不显示操作按钮
+                    }
                 }
 
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "删除",
-                        tint = MaterialTheme.colorScheme.error
-                    )
+                // 删除按钮（转换中和完成状态不显示）
+                if (task.status != TaskStatus.CONVERTING.name.lowercase() &&
+                    task.status != TaskStatus.COMPLETED.name.lowercase()
+                ) {
+                    IconButton(onClick = onDelete) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "删除",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         }

@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.webkit.*
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
@@ -31,7 +32,10 @@ import top.he2000.catcatchbrowser.ui.components.WindowSidebar
 import top.he2000.catcatchbrowser.ui.navigation.Screen
 import top.he2000.catcatchbrowser.viewmodel.MainViewModel
 import java.net.URLEncoder
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.Request as OkHttpRequest
+import java.io.IOException
 
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,6 +70,11 @@ fun WindowsScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+
+    // 返回键拦截：WebView 可后退时返回上一页，否则退出
+    BackHandler(enabled = webView?.canGoBack() == true) {
+        webView?.goBack()
+    }
     val context = LocalContext.current
 
     var prevDesktop by remember { mutableStateOf<Boolean?>(null) }
@@ -260,20 +269,29 @@ fun WindowsScreen(
                                         // 根据 URL 自动检测站点模式（标题此时不可用，仅靠 URL）
                                         viewModel.autoDetectSnifferMode(url ?: "", null)
                                         // 提前注入嗅探脚本，确保能捕获早期请求
-                                        try {
-                                            val scriptFile = viewModel.snifferMode.value.scriptFile
-                                            val script = ctx.assets.open(scriptFile)
-                                                .bufferedReader().use { it.readText() }
-                                            view?.evaluateJavascript(script, null)
-                                        } catch (e: Exception) {
-                                            e.printStackTrace()
+                                        view?.let { wv ->
+                                            injectSnifferScript(ctx, wv, viewModel.snifferMode.value.scriptFile)
                                         }
                                     }
 
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
                                         val pageTitle = view?.title
-                                        pageTitle?.let { viewModel.updateCurrentWindowTitle(it) }
+                                        pageTitle?.let {
+                                            viewModel.updateCurrentWindowTitle(it)
+                                            bridge.currentPageTitle = it
+                                            // 用真实标题回填嗅探结果和等待中的下载任务
+                                            viewModel.backfillSniffedTitle(it)
+                                        }
+                                        // 注入 CSS 允许网页文字自由复制
+                                        view?.evaluateJavascript(
+                                            """(function(){
+                                                var s=document.createElement('style');
+                                                s.textContent='*{-webkit-user-select:text!important;user-select:text!important;}';
+                                                document.head.appendChild(s);
+                                            })()""",
+                                            null
+                                        )
                                         url?.let {
                                             viewModel.updateBookmarkFavicon(it)
                                             viewModel.recordHistoryVisit(pageTitle ?: "", it)
@@ -288,12 +306,8 @@ fun WindowsScreen(
                                         val newMode = viewModel.snifferMode.value
                                         if (newMode != prevMode) {
                                             // 模式变化，重新注入对应脚本
-                                            try {
-                                                val script = ctx.assets.open(newMode.scriptFile)
-                                                    .bufferedReader().use { it.readText() }
-                                                view?.evaluateJavascript(script, null)
-                                            } catch (e: Exception) {
-                                                e.printStackTrace()
+                                            view?.let { wv ->
+                                                injectSnifferScript(ctx, wv, newMode.scriptFile)
                                             }
                                         }
                                     }
@@ -310,12 +324,6 @@ fun WindowsScreen(
                                         }
                                     }
 
-                                    private val sniffHttpClient = okhttp3.OkHttpClient.Builder()
-                                        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                                        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                                        .followRedirects(true)
-                                        .build()
-
                                     override fun shouldInterceptRequest(
                                         view: WebView?,
                                         request: WebResourceRequest?
@@ -331,36 +339,36 @@ fun WindowsScreen(
                                                 val reqHeaders = req.requestHeaders ?: emptyMap()
 
                                                 // 立即上报 URL（基本检测）
-                                                bridge.reportM3u8FromNative(url, reqHeaders, 0.0)
+                                                bridge.reportM3u8FromNative(url, reqHeaders, 0.0, bridge.currentPageTitle)
 
-                                                // 后台线程：单独请求 m3u8 内容解析时长
-                                                Thread {
-                                                    try {
-                                                        val reqBuilder = OkHttpRequest.Builder().url(url)
-                                                        reqHeaders.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
-                                                        if (!reqHeaders.containsKey("Referer")) {
-                                                            reqBuilder.addHeader("Referer", req.url.scheme + "://" + req.url.host)
-                                                        }
+                                                // 异步请求 m3u8 内容解析时长
+                                                val reqBuilder = OkHttpRequest.Builder().url(url)
+                                                reqHeaders.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
+                                                if (!reqHeaders.containsKey("Referer")) {
+                                                    reqBuilder.addHeader("Referer", req.url.scheme + "://" + req.url.host)
+                                                }
 
-                                                        val response = sniffHttpClient.newCall(reqBuilder.build()).execute()
-                                                        val body = response.body?.string() ?: ""
-                                                        response.close()
-
-                                                        if (response.code == 200 && body.isNotEmpty()) {
-                                                            val duration = parseNativeM3u8Duration(body)
-                                                            val headers = reqHeaders.toMutableMap()
-                                                            if (!headers.containsKey("Referer")) {
-                                                                headers["Referer"] = req.url.scheme + "://" + req.url.host
-                                                            }
-
-                                                            if (duration > 0) {
-                                                                bridge.reportM3u8FromNative(url, headers, duration)
-                                                            }
-                                                        }
-                                                    } catch (e: Exception) {
+                                                sniffHttpClient.newCall(reqBuilder.build()).enqueue(object : Callback {
+                                                    override fun onFailure(call: Call, e: IOException) {
                                                         bridge.log("[元数据解析] ${e.message}")
                                                     }
-                                                }.start()
+
+                                                    override fun onResponse(call: Call, response: okhttp3.Response) {
+                                                        response.use { resp ->
+                                                            val body = resp.body?.string() ?: ""
+                                                            if (resp.code == 200 && body.isNotEmpty()) {
+                                                                val duration = parseNativeM3u8Duration(body)
+                                                                val headers = reqHeaders.toMutableMap()
+                                                                if (!headers.containsKey("Referer")) {
+                                                                    headers["Referer"] = req.url.scheme + "://" + req.url.host
+                                                                }
+                                                                if (duration > 0) {
+                                                                    bridge.reportM3u8FromNative(url, headers, duration, bridge.currentPageTitle)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                })
                                             }
                                         }
                                         // 始终让 WebView 正常处理响应，不拦截
@@ -550,15 +558,8 @@ fun WindowsScreen(
                     currentMode = snifferMode,
                     onModeChange = { mode ->
                         viewModel.setSnifferMode(mode)
-                        // 切换模式后重新注入脚本
                         webView?.let { wv ->
-                            try {
-                                val script = context.assets.open(mode.scriptFile)
-                                    .bufferedReader().use { it.readText() }
-                                wv.evaluateJavascript(script, null)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
+                            injectSnifferScript(context, wv, mode.scriptFile)
                         }
                     },
                     onDownload = { sniffed ->
@@ -566,16 +567,9 @@ fun WindowsScreen(
                         showSnifferPanel = false
                     },
                     onRefresh = {
-                        // 清空当前结果并重新注入脚本
                         viewModel.clearCurrentSniffedUrls()
                         webView?.let { wv ->
-                            try {
-                                val script = context.assets.open(snifferMode.scriptFile)
-                                    .bufferedReader().use { it.readText() }
-                                wv.evaluateJavascript(script, null)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
+                            injectSnifferScript(context, wv, snifferMode.scriptFile)
                         }
                     },
                     onDismiss = { showSnifferPanel = false }
@@ -654,6 +648,26 @@ fun WindowsScreen(
                 )
             }
         }
+    }
+}
+
+private val sniffHttpClient = okhttp3.OkHttpClient.Builder()
+    .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+    .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+    .followRedirects(true)
+    .build()
+
+private fun injectSnifferScript(context: Context, webView: WebView, scriptFile: String) {
+    try {
+        val common = context.assets.open("sniffer_common.js")
+            .bufferedReader().use { it.readText() }
+        val mode = context.assets.open(scriptFile)
+            .bufferedReader().use { it.readText() }
+        webView.evaluateJavascript(common) {
+            webView.evaluateJavascript(mode, null)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
     }
 }
 

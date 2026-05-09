@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import top.he2000.catcatchbrowser.data.*
 import top.he2000.catcatchbrowser.downloader.TaskManager
 import top.he2000.catcatchbrowser.sniffer.SnifferBridge
@@ -52,12 +53,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val downloadingTasks: StateFlow<List<DownloadTaskEntity>> = allTasks.map { tasks ->
         tasks.filter {
             it.status == TaskStatus.DOWNLOADING.name.lowercase() ||
-                    it.status == TaskStatus.PENDING.name.lowercase()
+                    it.status == TaskStatus.CONVERTING.name.lowercase() ||
+                    it.status == TaskStatus.PENDING.name.lowercase() ||
+                    it.status == TaskStatus.PAUSED.name.lowercase()
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val completedTasks: StateFlow<List<DownloadTaskEntity>> = allTasks.map { tasks ->
         tasks.filter { it.status == TaskStatus.COMPLETED.name.lowercase() }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val failedTasks: StateFlow<List<DownloadTaskEntity>> = allTasks.map { tasks ->
+        tasks.filter {
+            it.status == TaskStatus.FAILED.name.lowercase() ||
+                    it.status == TaskStatus.CANCELLED.name.lowercase()
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // 当前窗口的嗅探结果
@@ -108,11 +118,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             UserPreferencesRepository.THEME_FOLLOW_SYSTEM
         )
 
+    val downloadPath: StateFlow<String> = userPrefs.downloadPath
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    val concurrentDownloads: StateFlow<Int> = userPrefs.concurrentDownloads
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 3)
+
+    val autoRetryEnabled: StateFlow<Boolean> = userPrefs.autoRetry
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    val maxRetriesSetting: StateFlow<Int> = userPrefs.maxRetries
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 3)
+
     init {
         addNewWindow()
         // 设置嗅探回调，将结果添加到对应窗口
         bridge.setOnM3u8Detected { sniffed, windowId ->
             addSniffedToWindow(sniffed, windowId)
+        }
+        // 连接下载设置到 TaskManager
+        viewModelScope.launch {
+            userPrefs.concurrentDownloads.collect { taskManager.maxConcurrentDownloads = it }
+        }
+        viewModelScope.launch {
+            userPrefs.autoRetry.collect { taskManager.autoRetryEnabled = it }
+        }
+        viewModelScope.launch {
+            userPrefs.maxRetries.collect { taskManager.maxRetryCount = it }
         }
     }
 
@@ -297,6 +329,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 页面加载完成后，用真实标题回填嗅探结果中标题为空的条目
+     */
+    fun backfillSniffedTitle(title: String) {
+        if (title.isBlank()) return
+        val index = _currentWindowIndex.value
+        val windows = _windows.value
+        if (index !in windows.indices) return
+
+        val window = windows[index]
+        var changed = false
+        val updated = window.sniffedUrls.map { sniffed ->
+            if (sniffed.title.isNullOrBlank()) {
+                changed = true
+                sniffed.copy(title = title)
+            } else {
+                sniffed
+            }
+        }
+        if (changed) {
+            _windows.value = windows.toMutableList().apply {
+                set(index, window.copy(sniffedUrls = updated))
+            }
+        }
+
+        // 同时更新等待中/暂停的下载任务的文件名（仍为占位符的）
+        viewModelScope.launch {
+            val sanitized = sanitizeFileName(title)
+            if (sanitized.isBlank() || sanitized == "video") return@launch
+            val tasks = taskManager.getAllTasks()
+            for (task in tasks) {
+                if (task.status == TaskStatus.PENDING.name.lowercase() &&
+                    task.fileName.startsWith("video_")
+                ) {
+                    val dir = java.io.File(task.savePath)
+                    val newFileName = generateUniqueFileName(dir, sanitized)
+                    taskManager.updateFileName(task.id, newFileName)
+                }
+            }
+        }
+    }
+
     fun updatePageProgress(progress: Int) {
         val index = _currentWindowIndex.value
         if (index in _windows.value.indices) {
@@ -383,6 +457,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             userPrefs.setSearchTemplate(template.trim())
         }
+    }
+
+    fun setDownloadPath(path: String) {
+        viewModelScope.launch {
+            if (path.isNotBlank()) {
+                val sdHelper = top.he2000.catcatchbrowser.util.SdCardHelper
+                val normalizedPath = sdHelper.normalizePath(path)
+
+                val dir = java.io.File(normalizedPath)
+                if (!dir.exists()) dir.mkdirs()
+
+                if (!dir.canWrite()) {
+                    val isSd = sdHelper.isSdCardPath(normalizedPath)
+                    val hasPerm = sdHelper.hasManageStoragePermission()
+                    if (isSd && !hasPerm) {
+                        _uiMessages.emit("请先授予\"所有文件访问\"权限后再保存")
+                    } else {
+                        _uiMessages.emit("下载路径不可写: $normalizedPath")
+                    }
+                    return@launch
+                }
+                userPrefs.setDownloadPath(normalizedPath)
+                _uiMessages.emit("下载路径已保存")
+                return@launch
+            }
+            userPrefs.setDownloadPath(path)
+        }
+    }
+
+    fun setConcurrentDownloads(value: Int) {
+        viewModelScope.launch { userPrefs.setConcurrentDownloads(value) }
+    }
+
+    fun setAutoRetry(enabled: Boolean) {
+        viewModelScope.launch { userPrefs.setAutoRetry(enabled) }
+    }
+
+    fun setMaxRetries(value: Int) {
+        viewModelScope.launch { userPrefs.setMaxRetries(value) }
     }
 
     fun recordHistoryVisit(title: String, url: String) {
@@ -477,18 +590,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun createDownloadTask(sniffed: SniffedM3u8) {
         viewModelScope.launch {
-            val fileName = sniffed.title ?: "video_${System.currentTimeMillis()}"
-            val savePath = getApplication<Application>()
-                .getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES)?.absolutePath
-                ?: getApplication<Application>().filesDir.absolutePath
+            val rawTitle = sniffed.title?.takeIf { it.isNotBlank() } ?: "video_${System.currentTimeMillis()}"
+            val sanitizedTitle = sanitizeFileName(rawTitle)
+            val customPath = userPrefs.downloadPath.first()
+            val savePath = if (customPath.isNotBlank()) {
+                top.he2000.catcatchbrowser.util.SdCardHelper.normalizePath(customPath)
+            } else {
+                getDefaultDownloadPath()
+            }
 
-            taskManager.createTask(
+            // 确保目录存在
+            val dir = java.io.File(savePath)
+            if (!dir.exists()) dir.mkdirs()
+
+            // 文件名去重：已存在则加序号
+            val fileName = generateUniqueFileName(dir, sanitizedTitle)
+
+            val taskId = taskManager.createTask(
                 url = sniffed.url,
                 fileName = fileName,
                 savePath = savePath,
                 requestHeaders = sniffed.requestHeaders
             )
+            // 创建后自动开始下载
+            taskManager.startTask(taskId)
+            _uiMessages.emit("已添加下载: $fileName")
         }
+    }
+
+    private fun getDefaultDownloadPath(): String {
+        // 优先使用公共 Download/CatCatch 目录
+        val publicDir = java.io.File(
+            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+            "CatCatch"
+        )
+        try {
+            if (!publicDir.exists()) publicDir.mkdirs()
+            if (publicDir.canWrite()) return publicDir.absolutePath
+        } catch (_: Exception) {
+            // 权限不足，降级到应用私有目录
+        }
+        // 降级：应用私有目录
+        return getApplication<Application>()
+            .getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)?.absolutePath
+            ?: getApplication<Application>().filesDir.absolutePath
+    }
+
+    private fun sanitizeFileName(name: String): String {
+        // 移除文件名中不允许的字符，截断过长名称
+        return name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .trim()
+            .take(100)
+            .ifBlank { "video" }
+    }
+
+    private fun generateUniqueFileName(dir: java.io.File, baseName: String): String {
+        // 检查 .ts 和 .mp4 都不存在才可用
+        fun exists(name: String): Boolean {
+            return java.io.File(dir, "$name.ts").exists() || java.io.File(dir, "$name.mp4").exists()
+        }
+        if (!exists(baseName)) return baseName
+        for (i in 1..999) {
+            val candidate = "${baseName}_$i"
+            if (!exists(candidate)) return candidate
+        }
+        return "${baseName}_${System.currentTimeMillis()}"
     }
 
     fun startTask(taskId: Long) {
@@ -500,6 +666,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resumeTask(taskId: Long) {
+        taskManager.resumeTask(taskId)
+    }
+
+    fun retryTask(taskId: Long) {
         viewModelScope.launch {
             taskManager.retryTask(taskId)
         }
@@ -515,9 +685,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         taskManager.pauseAll()
     }
 
+    fun startAllPending() {
+        viewModelScope.launch {
+            taskManager.startAllPending()
+        }
+    }
+
+    fun resumeAllPaused() {
+        viewModelScope.launch {
+            val paused = allTasks.value.filter { it.status == TaskStatus.PAUSED.name.lowercase() }
+            paused.forEach { taskManager.resumeTask(it.id) }
+        }
+    }
+
     fun clearCompleted() {
         viewModelScope.launch {
             taskManager.clearCompletedTasks()
+        }
+    }
+
+    fun clearFailed() {
+        viewModelScope.launch {
+            val failed = allTasks.value.filter {
+                it.status == TaskStatus.FAILED.name.lowercase() ||
+                        it.status == TaskStatus.CANCELLED.name.lowercase()
+            }
+            failed.forEach { taskManager.deleteTask(it.id) }
         }
     }
 

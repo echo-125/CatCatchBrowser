@@ -63,6 +63,50 @@ class UserPreferencesRepository(private val context: Context) {
         }
         .map { it[PREF_THEME_MODE] ?: THEME_FOLLOW_SYSTEM }
 
+    val downloadPath: Flow<String> = context.userPrefsDataStore.data
+        .catch { e ->
+            if (e is IOException) {
+                Log.e("UserPrefs", "Error reading downloadPath", e)
+                emit(androidx.datastore.preferences.core.emptyPreferences())
+            } else {
+                throw e
+            }
+        }
+        .map { it[PREF_DOWNLOAD_PATH] ?: "" }
+
+    val concurrentDownloads: Flow<Int> = context.userPrefsDataStore.data
+        .catch { e ->
+            if (e is IOException) {
+                Log.e("UserPrefs", "Error reading concurrentDownloads", e)
+                emit(androidx.datastore.preferences.core.emptyPreferences())
+            } else {
+                throw e
+            }
+        }
+        .map { it[PREF_CONCURRENT_DOWNLOADS] ?: 3 }
+
+    val autoRetry: Flow<Boolean> = context.userPrefsDataStore.data
+        .catch { e ->
+            if (e is IOException) {
+                Log.e("UserPrefs", "Error reading autoRetry", e)
+                emit(androidx.datastore.preferences.core.emptyPreferences())
+            } else {
+                throw e
+            }
+        }
+        .map { it[PREF_AUTO_RETRY] ?: true }
+
+    val maxRetries: Flow<Int> = context.userPrefsDataStore.data
+        .catch { e ->
+            if (e is IOException) {
+                Log.e("UserPrefs", "Error reading maxRetries", e)
+                emit(androidx.datastore.preferences.core.emptyPreferences())
+            } else {
+                throw e
+            }
+        }
+        .map { it[PREF_MAX_RETRIES] ?: 3 }
+
     suspend fun setDesktopSite(value: Boolean): Result<Unit> = runCatching {
         context.userPrefsDataStore.edit { it[PREF_DESKTOP_SITE] = value }
     }
@@ -79,11 +123,31 @@ class UserPreferencesRepository(private val context: Context) {
         context.userPrefsDataStore.edit { it[PREF_THEME_MODE] = mode }
     }
 
+    suspend fun setDownloadPath(value: String): Result<Unit> = runCatching {
+        context.userPrefsDataStore.edit { it[PREF_DOWNLOAD_PATH] = value }
+    }
+
+    suspend fun setConcurrentDownloads(value: Int): Result<Unit> = runCatching {
+        context.userPrefsDataStore.edit { it[PREF_CONCURRENT_DOWNLOADS] = value }
+    }
+
+    suspend fun setAutoRetry(value: Boolean): Result<Unit> = runCatching {
+        context.userPrefsDataStore.edit { it[PREF_AUTO_RETRY] = value }
+    }
+
+    suspend fun setMaxRetries(value: Int): Result<Unit> = runCatching {
+        context.userPrefsDataStore.edit { it[PREF_MAX_RETRIES] = value }
+    }
+
     companion object {
         private val PREF_DESKTOP_SITE = booleanPreferencesKey("desktop_site")
         private val PREF_HOMEPAGE_URL = stringPreferencesKey("homepage_url")
         private val PREF_SEARCH_TEMPLATE = stringPreferencesKey("search_template")
         private val PREF_THEME_MODE = intPreferencesKey("theme_mode")
+        private val PREF_DOWNLOAD_PATH = stringPreferencesKey("download_path")
+        private val PREF_CONCURRENT_DOWNLOADS = intPreferencesKey("concurrent_downloads")
+        private val PREF_AUTO_RETRY = booleanPreferencesKey("auto_retry")
+        private val PREF_MAX_RETRIES = intPreferencesKey("max_retries")
 
         const val THEME_FOLLOW_SYSTEM = 0
         const val THEME_LIGHT = 1

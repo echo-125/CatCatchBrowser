@@ -6,6 +6,10 @@ build/
 .externalNativeBuild
 .cxx
 
+# Signing
+*.keystore
+*.jks
+
 # Local configuration
 local.properties
 

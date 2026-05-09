@@ -18,8 +18,10 @@ data class DownloadTaskEntity(
     val progress: Float = 0f, // 0-100
     val downloadedSegments: Int = 0,
     val totalSegments: Int = 0,
+    val totalBytesDownloaded: Long = 0,
     val currentSpeed: String = "",
     val errorMessage: String = "",
+    val retryCount: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -30,6 +32,7 @@ data class DownloadTaskEntity(
 enum class TaskStatus {
     PENDING,
     DOWNLOADING,
+    CONVERTING,
     PAUSED,
     COMPLETED,
     FAILED,
@@ -39,6 +42,7 @@ enum class TaskStatus {
         fun fromString(value: String): TaskStatus = when (value.lowercase()) {
             "pending" -> PENDING
             "downloading" -> DOWNLOADING
+            "converting" -> CONVERTING
             "paused" -> PAUSED
             "completed" -> COMPLETED
             "failed" -> FAILED

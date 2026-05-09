@@ -119,7 +119,8 @@ class DownloadService : Service() {
         serviceScope.launch {
             collect { tasks ->
                 val downloadingTasks = tasks.filter {
-                    it.status == TaskStatus.DOWNLOADING.name.lowercase()
+                    it.status == TaskStatus.DOWNLOADING.name.lowercase() ||
+                        it.status == TaskStatus.CONVERTING.name.lowercase()
                 }
 
                 if (downloadingTasks.isEmpty()) {
@@ -154,10 +155,15 @@ class DownloadService : Service() {
      */
     private fun createSingleTaskNotification(task: DownloadTaskEntity): Notification {
         val progress = task.progress.toInt()
+        val contentText = if (task.status == TaskStatus.CONVERTING.name.lowercase()) {
+            "正在转换格式..."
+        } else {
+            "下载进度: $progress% | ${task.currentSpeed}"
+        }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(task.fileName)
-            .setContentText("下载进度: $progress%")
+            .setContentText(contentText)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setProgress(100, progress, false)
             .setOngoing(true)
@@ -173,16 +179,22 @@ class DownloadService : Service() {
      * 创建多任务通知
      */
     private fun createMultiTaskNotification(tasks: List<DownloadTaskEntity>): Notification {
-        val completed = tasks.count {
-            it.status == TaskStatus.COMPLETED.name.lowercase()
-        }
+        val downloading = tasks.count { it.status == TaskStatus.DOWNLOADING.name.lowercase() }
+        val converting = tasks.count { it.status == TaskStatus.CONVERTING.name.lowercase() }
         val total = tasks.size
+        val avgProgress = if (total > 0) tasks.sumOf { it.progress.toDouble() / total }.toInt() else 0
+
+        val statusText = buildString {
+            append("$downloading 个下载中")
+            if (converting > 0) append("，$converting 个转换中")
+            append(" | 平均 $avgProgress%")
+        }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("正在下载")
-            .setContentText("$completed/$total 个任务已完成")
+            .setContentTitle("$total 个任务进行中")
+            .setContentText(statusText)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setProgress(total, completed, false)
+            .setProgress(100, avgProgress, false)
             .setOngoing(true)
             .build()
     }

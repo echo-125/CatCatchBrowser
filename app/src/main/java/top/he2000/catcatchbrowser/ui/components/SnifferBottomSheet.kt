@@ -31,7 +31,8 @@ import top.he2000.catcatchbrowser.data.SniffedM3u8
 enum class SnifferMode(val displayName: String, val scriptFile: String) {
     GENERAL("通用模式", "sniffer_general.js"),
     ROU("rou模式", "sniffer_rou.js"),
-    CHIGUA("吃瓜模式", "sniffer_chigua.js")
+    CHIGUA("吃瓜模式", "sniffer_chigua.js"),
+    CAT_CATCH("猫抓模式", "sniffer_catcatch.js")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -398,6 +399,7 @@ private fun getModeDescription(mode: SnifferMode): String {
         SnifferMode.GENERAL -> "基础网络请求拦截"
         SnifferMode.ROU -> "自动播放 + 广告拦截(rou专用)"
         SnifferMode.CHIGUA -> "深度扫描 + DOM监听"
+        SnifferMode.CAT_CATCH -> "深度内容嗅探(参考猫抓插件)"
     }
 }
 

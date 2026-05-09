@@ -10,6 +10,7 @@ import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * M3U8 分片下载器
@@ -41,6 +42,13 @@ class SegmentDownloader(
 
     private val isCancelled = AtomicBoolean(false)
     private val activeJobs = ConcurrentHashMap<Int, Job>()
+    private val totalBytes = AtomicLong(0)
+
+    // 滑动窗口速度追踪
+    private val speedSamples = mutableListOf<SpeedSample>()
+    private val speedLock = Any()
+
+    private data class SpeedSample(val timestamp: Long, val totalBytes: Long)
 
     /**
      * 下载 M3U8 视频
@@ -57,9 +65,16 @@ class SegmentDownloader(
         requestHeaders: Map<String, String> = emptyMap(),
         concurrency: Int = 16,
         scope: CoroutineScope,
+        initialDownloadedSegments: Int = 0,
+        initialBytes: Long = 0,
         progressCallback: ((downloaded: Int, total: Int, speed: String) -> Unit)? = null
     ): Result = withContext(Dispatchers.IO) {
         isCancelled.set(false)
+        totalBytes.set(initialBytes)
+        synchronized(speedLock) {
+            speedSamples.clear()
+            speedSamples.add(SpeedSample(System.currentTimeMillis(), initialBytes))
+        }
 
         try {
             // 1. 下载 M3U8 内容
@@ -81,7 +96,7 @@ class SegmentDownloader(
 
             // 4. 并发下载分片
             val totalSegments = segments.size
-            val downloadedCount = AtomicInteger(0)
+            val downloadedCount = AtomicInteger(initialDownloadedSegments)
             val failedCount = AtomicInteger(0)
             val startTime = System.currentTimeMillis()
 
@@ -113,12 +128,7 @@ class SegmentDownloader(
 
                         // 更新进度
                         val current = downloadedCount.get()
-                        val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
-                        val speed = if (elapsed > 0) {
-                            "%.1f 片/秒".format(current / elapsed)
-                        } else {
-                            ""
-                        }
+                        val speed = calculateSpeed()
                         progressCallback?.invoke(current, totalSegments, speed)
                     }
                 }.awaitAll()
@@ -226,7 +236,17 @@ class SegmentDownloader(
                     if (response.isSuccessful) {
                         response.body?.byteStream()?.use { input ->
                             outputFile.outputStream().use { output ->
-                                input.copyTo(output)
+                                val buffer = ByteArray(8192)
+                                var bytesRead: Int
+                                while (input.read(buffer).also { bytesRead = it } != -1) {
+                                    output.write(buffer, 0, bytesRead)
+                                    totalBytes.addAndGet(bytesRead.toLong())
+                                    // 每读取 64KB 记录一次速度采样
+                                    val currentTotal = totalBytes.get()
+                                    if (currentTotal % 65536 < 8192) {
+                                        recordSpeedSample(currentTotal)
+                                    }
+                                }
                             }
                         }
                         return true
@@ -237,10 +257,51 @@ class SegmentDownloader(
             }
 
             if (retry < maxRetries - 1) {
-                delay(retryDelayMs)
+                delay(retryDelayMs * (1L shl retry))
             }
         }
         return false
+    }
+
+    /**
+     * 记录速度采样点
+     */
+    private fun recordSpeedSample(bytes: Long) {
+        synchronized(speedLock) {
+            val now = System.currentTimeMillis()
+            speedSamples.add(SpeedSample(now, bytes))
+            // 保留最近 10 秒的采样
+            val cutoff = now - 10_000
+            speedSamples.removeAll { it.timestamp < cutoff }
+        }
+    }
+
+    /**
+     * 基于滑动窗口计算当前速度
+     * 使用最近 5 秒的字节增量计算，而非全局平均
+     */
+    private fun calculateSpeed(): String {
+        synchronized(speedLock) {
+            if (speedSamples.size < 2) return ""
+
+            val now = System.currentTimeMillis()
+            val windowMs = 5_000L // 5 秒窗口
+            val cutoff = now - windowMs
+
+            // 找到窗口内最早的采样点
+            val windowStart = speedSamples.firstOrNull { it.timestamp >= cutoff }
+                ?: speedSamples.first()
+
+            val windowEnd = speedSamples.last()
+            val elapsed = (windowEnd.timestamp - windowStart.timestamp) / 1000.0
+
+            if (elapsed <= 0) return ""
+
+            val bytesInWindow = windowEnd.totalBytes - windowStart.totalBytes
+            val bytesPerSecond = (bytesInWindow / elapsed).toLong()
+
+            return formatSpeed(bytesPerSecond)
+        }
     }
 
     /**
@@ -276,8 +337,7 @@ class SegmentDownloader(
                         }
 
                         val current = downloadedCount.get()
-                        val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
-                        val speed = if (elapsed > 0) "%.1f 片/秒".format(current / elapsed) else ""
+                        val speed = calculateSpeed()
                         progressCallback?.invoke(current, totalSegments, speed)
                     }
                 }.awaitAll()
@@ -310,7 +370,38 @@ class SegmentDownloader(
         activeJobs.clear()
     }
 
+    fun getTotalBytesDownloaded(): Long = totalBytes.get()
+
     companion object {
         private const val MAX_PLAYLIST_DEPTH = 5
+
+        /**
+         * 格式化速度
+         */
+        fun formatSpeed(bps: Long): String = when {
+            bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)
+            bps >= 1_000 -> "%.1f KB/s".format(bps / 1_000.0)
+            else -> "$bps B/s"
+        }
+
+        /**
+         * 格式化文件大小
+         */
+        fun formatSize(bytes: Long): String = when {
+            bytes >= 1_073_741_824 -> "%.2f GB".format(bytes / 1_073_741_824.0)
+            bytes >= 1_048_576 -> "%.1f MB".format(bytes / 1_048_576.0)
+            bytes >= 1_024 -> "%.0f KB".format(bytes / 1_024.0)
+            else -> "$bytes B"
+        }
+
+        /**
+         * 格式化剩余时间
+         */
+        fun formatEta(seconds: Long): String = when {
+            seconds < 0 -> "--:--"
+            seconds < 60 -> "${seconds}秒"
+            seconds < 3600 -> "${seconds / 60}分${seconds % 60}秒"
+            else -> "${seconds / 3600}时${(seconds % 3600) / 60}分"
+        }
     }
 }
